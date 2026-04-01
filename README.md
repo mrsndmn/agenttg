@@ -61,6 +61,12 @@ from agenttg import md_table_to_png
 png_path = md_table_to_png("| A | B |\n|---|---|\n| 1 | 2 |")
 ```
 
+## Formatting error fallback
+
+All sending functions that use a `parse_mode` (`send_text_parts`, `send_reply_html`, `send_reply_markdown`) automatically detect Telegram's "can't parse entities" error (HTTP 400) and retry the message without formatting, delivering it as plain text. This ensures messages are always delivered even if the markup is malformed.
+
+Additionally, `send_reply_markdown` falls back to sending tables as formatted code blocks when the table-to-PNG rendering fails (e.g. `pandoc`/`wkhtmltopdf` not installed).
+
 ## API reference
 
 ### Sending

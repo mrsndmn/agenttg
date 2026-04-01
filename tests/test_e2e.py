@@ -70,6 +70,22 @@ def test_send_reply_html(telegram_token, telegram_chat_id):
         assert resp.json()["ok"] is True
 
 
+def test_send_table_as_png(telegram_token, telegram_chat_id):
+    """Render a markdown table to PNG and send it as a photo."""
+    table_md = (
+        "| Model | Accuracy | F1 |\n"
+        "|-------|----------|-----|\n"
+        "| A     | 95.2     | 0.94|\n"
+        "| B     | 92.1     | 0.91|"
+    )
+    png_path = agenttg.md_table_to_png(table_md)
+    assert png_path.exists()
+    resp = agenttg.send_photo(telegram_token, telegram_chat_id, png_path, caption="[agenttg e2e] Table as PNG")
+    assert resp is not None
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
 def test_fetch_bot_username(telegram_token):
     """Fetch bot username via getMe API."""
     username = agenttg.fetch_bot_username(telegram_token)

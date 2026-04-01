@@ -1,7 +1,16 @@
+---
+name: agenttg-usage
+description: "agenttg Library Usage\nTRIGGER when: code imports `agenttg`, or user asks about sending Telegram messages, formatting markdown for Telegram, rendering tables as PNG for Telegram, or using the agenttg library.\nDO NOT TRIGGER when: code imports other messaging libraries (slack_sdk, discord.py, etc.), general Telegram Bot API questions unrelated to agenttg."
+---
+
 # agenttg Library Usage
 
 agenttg converts Markdown to Telegram-compatible formatting and provides
 a thin HTTP client for the Telegram Bot API.
+
+This skill pairs well with the official **agent-sdk-dev** plugin when building
+Telegram-based agents with the Claude Agent SDK — use agenttg for message
+formatting and delivery, and agent-sdk-dev for the agent orchestration layer.
 
 ## Installation
 
@@ -77,6 +86,16 @@ username = agenttg.fetch_bot_username(TOKEN)
 offset, messages = agenttg.get_updates(TOKEN, CHAT_ID, offset=0)
 offset, all_messages = agenttg.get_all_updates(TOKEN, offset=0)
 ```
+
+## Formatting error fallback
+
+All sending functions that use a `parse_mode` (`send_text_parts`, `send_reply_html`,
+`send_reply_markdown`) automatically detect Telegram's "can't parse entities" error
+(HTTP 400) and retry the message without formatting, delivering it as plain text.
+This ensures messages are always delivered even if the markup is malformed.
+
+Additionally, `send_reply_markdown` falls back to sending tables as formatted code
+blocks when the table-to-PNG rendering fails (e.g. `pandoc`/`wkhtmltopdf` not installed).
 
 ## Table to PNG
 

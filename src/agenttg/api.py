@@ -269,7 +269,7 @@ def send_reply_markdown(
     chat_id: str,
     body: str,
     reply_to_message_id: int | None = None,
-    highlight_max: bool = True,
+    highlight_max: bool = False,
     thread_id: int | None = None,
 ) -> list[requests.Response]:
     """Send a markdown reply with text/table segmentation and image support.

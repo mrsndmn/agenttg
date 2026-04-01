@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: agenttg
+Version: 0.1.0
+Summary: Markdown-to-Telegram formatting and API client for agents
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.28
+Requires-Dist: Pillow>=9.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+Requires-Dist: ruff>=0.4; extra == "dev"
+Requires-Dist: pre-commit; extra == "dev"
+Requires-Dist: python-dotenv; extra == "dev"
+Dynamic: license-file
+
 # agenttg
 
 Markdown-to-Telegram formatting and API client for agents.

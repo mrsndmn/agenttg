@@ -28,6 +28,7 @@ def send_photo(
     caption: str | None = None,
     delete_after_send: bool = True,
     reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
 ) -> requests.Response | None:
     """Send an image file as a photo to the chat. Returns response or None on failure."""
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -36,6 +37,8 @@ def send_photo(
         data["caption"] = caption[:1024]
     if reply_to_message_id is not None:
         data["reply_to_message_id"] = reply_to_message_id
+    if thread_id is not None:
+        data["message_thread_id"] = thread_id
     try:
         with open(png_path, "rb") as f:
             resp = requests.post(
@@ -66,6 +69,7 @@ def send_text_parts(
     parts: list[str],
     add_part_prefix: bool,
     reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
 ) -> list[requests.Response]:
     """Send text parts as Telegram messages with MarkdownV2. Optionally add [1/N] prefix."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -81,6 +85,8 @@ def send_text_parts(
         }
         if reply_to_message_id is not None and i == 0:
             payload["reply_to_message_id"] = reply_to_message_id
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         try:
             resp = requests.post(url, json=payload, timeout=10)
             result.append(resp)
@@ -118,6 +124,7 @@ def send_reply(
     chat_id: str,
     text: str,
     reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
 ) -> list[requests.Response]:
     """Send a plain-text reply to the chat, optionally replying to a message."""
     parts = split_text(text, limit=TELEGRAM_TEXT_LIMIT)
@@ -132,6 +139,8 @@ def send_reply(
         }
         if reply_to_message_id is not None and i == 0:
             payload["reply_to_message_id"] = reply_to_message_id
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         try:
             resp = requests.post(url, json=payload, timeout=10)
             result.append(resp)
@@ -151,6 +160,7 @@ def send_reply_html(
     chat_id: str,
     html: str,
     reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
 ) -> list[requests.Response]:
     """Send a reply with parse_mode=HTML."""
     if not html.strip():
@@ -180,6 +190,8 @@ def send_reply_html(
         }
         if reply_to_message_id is not None and i == 0:
             payload["reply_to_message_id"] = reply_to_message_id
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         try:
             resp = requests.post(url, json=payload, timeout=10)
             result.append(resp)
@@ -218,6 +230,7 @@ def send_reply_markdown(
     body: str,
     reply_to_message_id: int | None = None,
     highlight_max: bool = True,
+    thread_id: int | None = None,
 ) -> list[requests.Response]:
     """Send a markdown reply with text/table segmentation and image support.
 
@@ -245,6 +258,7 @@ def send_reply_markdown(
                     parts,
                     add_part_prefix=len(parts) > 1,
                     reply_to_message_id=reply_id,
+                    thread_id=thread_id,
                 )
             )
             first_message = False
@@ -257,6 +271,7 @@ def send_reply_markdown(
                     chat_id,
                     png_path,
                     reply_to_message_id=reply_to_message_id if first_message else None,
+                    thread_id=thread_id,
                 )
                 if photo_resp is not None:
                     all_responses.append(photo_resp)
@@ -273,6 +288,7 @@ def send_reply_markdown(
                         parts,
                         add_part_prefix=len(parts) > 1,
                         reply_to_message_id=reply_id,
+                        thread_id=thread_id,
                     )
                 )
                 first_message = False
@@ -288,6 +304,7 @@ def send_reply_markdown(
                 caption=caption,
                 delete_after_send=False,
                 reply_to_message_id=reply_to_message_id if first_message else None,
+                thread_id=thread_id,
             )
             if photo_resp is not None:
                 all_responses.append(photo_resp)
@@ -301,6 +318,7 @@ def send_reply_markdown(
                 [escape_markdownv2(body)],
                 add_part_prefix=False,
                 reply_to_message_id=reply_to_message_id,
+                thread_id=thread_id,
             )
         )
 

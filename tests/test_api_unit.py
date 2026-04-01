@@ -57,6 +57,24 @@ def test_send_reply_with_reply_to(mock_post):
     assert payload["reply_to_message_id"] == 42
 
 
+@patch("agenttg.api.requests.post")
+def test_send_reply_with_thread_id(mock_post):
+    mock_post.return_value = _make_ok_response()
+    agenttg.send_reply("TOKEN", "123", "Hi", thread_id=99)
+    payload = mock_post.call_args[1]["json"]
+    assert payload["message_thread_id"] == 99
+
+
+@patch("agenttg.api.requests.post")
+def test_send_reply_thread_id_on_all_parts(mock_post):
+    mock_post.return_value = _make_ok_response()
+    text = "x" * 5000
+    agenttg.send_reply("TOKEN", "123", text, thread_id=99)
+    for call in mock_post.call_args_list:
+        payload = call[1]["json"]
+        assert payload["message_thread_id"] == 99
+
+
 # ---------------------------------------------------------------------------
 # send_reply_html
 # ---------------------------------------------------------------------------
@@ -94,6 +112,33 @@ def test_send_reply_html_empty_returns_empty(mock_post):
 # ---------------------------------------------------------------------------
 # send_text_parts
 # ---------------------------------------------------------------------------
+
+
+@patch("agenttg.api.requests.post")
+def test_send_reply_html_with_thread_id(mock_post):
+    mock_post.return_value = _make_ok_response()
+    agenttg.send_reply_html("TOKEN", "123", "<b>Bold</b>", thread_id=55)
+    payload = mock_post.call_args[1]["json"]
+    assert payload["message_thread_id"] == 55
+
+
+@patch("agenttg.api.requests.post")
+def test_send_text_parts_with_thread_id(mock_post):
+    mock_post.return_value = _make_ok_response()
+    agenttg.send_text_parts("TOKEN", "123", ["p1", "p2"], add_part_prefix=False, thread_id=77)
+    for call in mock_post.call_args_list:
+        payload = call[1]["json"]
+        assert payload["message_thread_id"] == 77
+
+
+@patch("agenttg.api.requests.post")
+def test_send_photo_with_thread_id(mock_post, tmp_path):
+    mock_post.return_value = _make_ok_response()
+    img_path = tmp_path / "test.png"
+    img_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+    agenttg.send_photo("TOKEN", "123", img_path, thread_id=88, delete_after_send=False)
+    data = mock_post.call_args[1]["data"]
+    assert data["message_thread_id"] == 88
 
 
 @patch("agenttg.api.requests.post")

@@ -38,7 +38,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: sudo apt-get update && sudo apt-get install -y pandoc wkhtmltopdf
+      - name: Install pandoc and wkhtmltox
+        run: |
+          sudo apt-get update && sudo apt-get install -y pandoc wget
+          wget -qO /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+          sudo dpkg -i /tmp/wkhtmltox.deb || sudo apt-get install -fy
+          wkhtmltoimage --version
       - run: pip install -e ".[dev]"
       - run: pytest -v --tb=short -m e2e
         env:

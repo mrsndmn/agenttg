@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -19,6 +20,40 @@ from .formatting import (
 from .table_to_png import md_table_to_png
 
 logger = logging.getLogger("agenttg")
+
+_MAX_RETRIES = 3
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _request_with_retry(method, url, **kwargs):
+    """Execute an HTTP request with exponential backoff retry on transient errors."""
+    files = kwargs.get("files")
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = method(url, **kwargs)
+            if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_RETRIES - 1:
+                return resp
+            logger.warning(
+                "Telegram API %s returned %s, retry %d/%d",
+                url.rsplit("/", 1)[-1],
+                resp.status_code,
+                attempt + 1,
+                _MAX_RETRIES - 1,
+            )
+        except requests.RequestException:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            logger.warning(
+                "Telegram API %s request failed, retry %d/%d",
+                url.rsplit("/", 1)[-1],
+                attempt + 1,
+                _MAX_RETRIES - 1,
+            )
+        if files:
+            for f in files.values():
+                if hasattr(f, "seek"):
+                    f.seek(0)
+        time.sleep(2**attempt)
 
 
 def send_photo(
@@ -41,7 +76,8 @@ def send_photo(
         data["message_thread_id"] = thread_id
     try:
         with open(png_path, "rb") as f:
-            resp = requests.post(
+            resp = _request_with_retry(
+                requests.post,
                 url,
                 data=data,
                 files={"photo": f},
@@ -88,7 +124,7 @@ def send_text_parts(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -98,7 +134,9 @@ def send_text_parts(
                 payload_plain = payload.copy()
                 del payload_plain["parse_mode"]
                 try:
-                    resp_retry = requests.post(url, json=payload_plain, timeout=10)
+                    resp_retry = _request_with_retry(
+                        requests.post, url, json=payload_plain, timeout=10
+                    )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
                         logger.warning(
@@ -142,7 +180,7 @@ def send_reply(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code != 200:
                 logger.warning(
@@ -193,7 +231,7 @@ def send_reply_html(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -203,7 +241,9 @@ def send_reply_html(
                 payload_plain = payload.copy()
                 del payload_plain["parse_mode"]
                 try:
-                    resp_retry = requests.post(url, json=payload_plain, timeout=10)
+                    resp_retry = _request_with_retry(
+                        requests.post, url, json=payload_plain, timeout=10
+                    )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
                         logger.warning(
@@ -264,6 +304,7 @@ def send_reply_markdown(
             first_message = False
         elif segment.kind == "table":
             content = segment.content
+            photo_sent = False
             try:
                 png_path = md_table_to_png(content, output_path=None, highlight_max=highlight_max)
                 photo_resp = send_photo(
@@ -273,13 +314,18 @@ def send_reply_markdown(
                     reply_to_message_id=reply_to_message_id if first_message else None,
                     thread_id=thread_id,
                 )
-                if photo_resp is not None:
+                if photo_resp is not None and photo_resp.status_code == 200:
                     all_responses.append(photo_resp)
-                first_message = False
+                    photo_sent = True
+                elif photo_resp is not None:
+                    logger.warning(
+                        "sendPhoto failed (%s), falling back to code block", photo_resp.status_code
+                    )
             except (RuntimeError, OSError) as exc:
-                logger.warning("Table-to-PNG failed, sending as code block: %s", exc)
-                formatted = format_markdown(content)
-                parts = split_text(formatted, limit=TELEGRAM_TEXT_LIMIT - max_prefix_len)
+                logger.warning("Table-to-PNG failed, falling back to code block: %s", exc)
+            if not photo_sent:
+                code_block = f"```\n{content}\n```"
+                parts = split_text(code_block, limit=TELEGRAM_TEXT_LIMIT - max_prefix_len)
                 reply_id = reply_to_message_id if first_message else None
                 all_responses.extend(
                     send_text_parts(
@@ -291,7 +337,7 @@ def send_reply_markdown(
                         thread_id=thread_id,
                     )
                 )
-                first_message = False
+            first_message = False
         elif segment.kind == "image":
             if segment.image is None:
                 continue
@@ -347,7 +393,7 @@ def get_all_updates(
     next_offset = offset
     messages: list[tuple[str, str, int, int | None]] = []
     try:
-        resp = requests.get(url, timeout=timeout_sec + 10)
+        resp = _request_with_retry(requests.get, url, timeout=timeout_sec + 10)
         if resp.status_code != 200:
             return (next_offset, [])
         data = resp.json()
@@ -384,7 +430,7 @@ def set_message_reaction(
         "reaction": [{"type": "emoji", "emoji": emoji}],
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
         if resp.status_code != 200:
             logger.warning(
                 "setMessageReaction returned %s: %s",
@@ -399,7 +445,7 @@ def fetch_bot_username(token: str) -> str | None:
     """Call Telegram getMe API once to retrieve the bot username."""
     url = f"https://api.telegram.org/bot{token}/getMe"
     try:
-        resp = requests.get(url, timeout=10)
+        resp = _request_with_retry(requests.get, url, timeout=10)
         if resp.status_code != 200:
             logger.warning("getMe returned %s: %s", resp.status_code, resp.text[:200])
             return None

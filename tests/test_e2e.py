@@ -80,7 +80,9 @@ def test_send_table_as_png(telegram_token, telegram_chat_id):
     )
     png_path = agenttg.md_table_to_png(table_md)
     assert png_path.exists()
-    resp = agenttg.send_photo(telegram_token, telegram_chat_id, png_path, caption="[agenttg e2e] Table as PNG")
+    resp = agenttg.send_photo(
+        telegram_token, telegram_chat_id, png_path, caption="[agenttg e2e] Table as PNG"
+    )
     assert resp is not None
     assert resp.status_code == 200
     assert resp.json()["ok"] is True

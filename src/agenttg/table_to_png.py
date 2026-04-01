@@ -42,13 +42,10 @@ _STYLE_BLOCK = """
     font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
     margin: 16px;
     width: fit-content;
-    max-width: 100%;
     box-sizing: border-box;
   }
   table {
     border-collapse: collapse;
-    width: 100%;
-    max-width: 100%;
     font-size: 14px;
     table-layout: auto;
     box-sizing: border-box;
@@ -128,7 +125,6 @@ def _make_script_block(highlight_max: bool) -> str:
     var margin = 2 * 16;
     var adaptiveWidth = tableWidth + margin;
     body.style.width = adaptiveWidth + 'px';
-    body.style.maxWidth = '100%';
   }}
 }})();
 </script>
@@ -243,6 +239,7 @@ def md_table_to_png(
                     _resolve_wkhtmltoimage(wkhtmltoimage_path),
                     "--width",
                     str(width),
+                    "--enable-smart-width",
                     "--enable-local-file-access",
                     "--quiet",
                     str(html_path),

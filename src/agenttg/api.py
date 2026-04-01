@@ -81,7 +81,7 @@ def send_photo(
                 url,
                 data=data,
                 files={"photo": f},
-                timeout=30,
+                timeout=60,
             )
         if resp.status_code != 200:
             logger.warning(

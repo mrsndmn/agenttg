@@ -14,26 +14,31 @@ from pathlib import Path
 from PIL import Image
 
 _WKHTMLTOIMAGE_LOCAL = Path.home() / ".local/wkhtmltox/usr/local/bin/wkhtmltoimage"
+_PANDOC_LOCAL = Path.home() / ".local/pandoc/usr/bin/pandoc"
 
 
-def _resolve_wkhtmltoimage(custom_path: str | None = None) -> str:
-    """Return path to wkhtmltoimage.
+def _resolve_binary(name: str, local_path: Path, custom_path: str | None = None) -> str:
+    """Return path to a binary.
 
     Search order: custom_path > ~/.local install > system PATH.
     Raises RuntimeError if not found.
     """
     if custom_path and Path(custom_path).exists():
         return custom_path
-    if _WKHTMLTOIMAGE_LOCAL.exists():
-        return str(_WKHTMLTOIMAGE_LOCAL)
-    system_path = shutil.which("wkhtmltoimage")
+    if local_path.exists():
+        return str(local_path)
+    system_path = shutil.which(name)
     if system_path:
         return system_path
-    raise RuntimeError(
-        "wkhtmltoimage not found. Install wkhtmltopdf:\n"
-        "  apt-get install wkhtmltopdf\n"
-        "  # or download from https://wkhtmltopdf.org/downloads.html"
-    )
+    raise RuntimeError(f"{name} not found. Install via:\n  bash scripts/install_deps_local.sh\n")
+
+
+def _resolve_wkhtmltoimage(custom_path: str | None = None) -> str:
+    return _resolve_binary("wkhtmltoimage", _WKHTMLTOIMAGE_LOCAL, custom_path)
+
+
+def _resolve_pandoc() -> str:
+    return _resolve_binary("pandoc", _PANDOC_LOCAL)
 
 
 _STYLE_BLOCK = """
@@ -208,7 +213,7 @@ def md_table_to_png(
         try:
             result = subprocess.run(
                 [
-                    "pandoc",
+                    _resolve_pandoc(),
                     str(md_path),
                     "-f",
                     "markdown",

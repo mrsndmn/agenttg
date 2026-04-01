@@ -8,10 +8,23 @@ Markdown-to-Telegram formatting and API client for agents.
 pip install git+https://github.com/mrsndmn/agenttg.git@main
 ```
 
-Optional system dependencies for table-to-PNG rendering:
+Optional system dependencies for table-to-PNG rendering (pandoc 2.9.x and wkhtmltox 0.12.6.1 with patched Qt):
+
+**With sudo:**
 ```bash
-apt-get install pandoc wkhtmltopdf
+wget -qO /tmp/pandoc.deb https://github.com/jgm/pandoc/releases/download/2.9.2.1/pandoc-2.9.2.1-1-amd64.deb
+sudo dpkg -i /tmp/pandoc.deb
+
+wget -qO /tmp/wkhtmltox.deb https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb
+sudo dpkg -i /tmp/wkhtmltox.deb
 ```
+
+**Without sudo** (installs to `~/.local`):
+```bash
+bash scripts/install_deps_local.sh
+```
+
+> **Note:** pandoc 3.x generates incompatible table HTML. The apt `wkhtmltopdf` package lacks the patched Qt needed for proper rendering. Use the pinned versions above.
 
 ## Quick start
 

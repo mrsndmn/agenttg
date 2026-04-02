@@ -182,7 +182,7 @@ def md_table_to_png(
     md_content: str,
     output_path: Path | None = None,
     width: int = 2100,
-    highlight_max: bool = True,
+    highlight_max: bool = False,
     wkhtmltoimage_path: str | None = None,
 ) -> Path:
     """Convert a markdown table string to a PNG image file.

@@ -45,7 +45,9 @@ def escape_markdownv2(text: str) -> str:
 
     def protect_bold(m: re.Match[str]) -> str:
         ph = make_placeholder()
-        placeholders[ph] = m.group(0)
+        # Convert standard Markdown **bold** to MarkdownV2 *bold*
+        inner = m.group(0)[2:-2]
+        placeholders[ph] = f"*{inner}*"
         return ph
 
     protected_text = re.sub(r"\*\*[^*]+\*\*", protect_bold, protected_text)
@@ -59,10 +61,18 @@ def escape_markdownv2(text: str) -> str:
 
     def protect_link(m: re.Match[str]) -> str:
         ph = make_placeholder()
-        placeholders[ph] = m.group(0)
+        # Pre-escape link parts: structural []() stay intact,
+        # text and URL contents are escaped separately.
+        text = m.group(1)
+        url = m.group(2)
+        _escape_in_link_text = set("_*[]()~`>#+-=|{}.!\\")
+        _escape_in_url = set(")\\")
+        escaped_text = "".join("\\" + c if c in _escape_in_link_text else c for c in text)
+        escaped_url = "".join("\\" + c if c in _escape_in_url else c for c in url)
+        placeholders[ph] = f"[{escaped_text}]({escaped_url})"
         return ph
 
-    protected_text = re.sub(r"\[[^\]]+\]\([^)]+\)", protect_link, protected_text)
+    protected_text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", protect_link, protected_text)
 
     result = []
     for char in protected_text:
@@ -76,8 +86,14 @@ def escape_markdownv2(text: str) -> str:
 
     _escape_inside_entity = set("()\\.[]~>#+-=|{}!")
     for placeholder_char, original in reversed(list(placeholders.items())):
-        escaped_original = "".join("\\" + c if c in _escape_inside_entity else c for c in original)
-        escaped = escaped.replace(placeholder_char, escaped_original)
+        # Links are pre-escaped during protection; insert as-is.
+        if original.startswith("[") and "](" in original and original.endswith(")"):
+            escaped = escaped.replace(placeholder_char, original)
+        else:
+            escaped_original = "".join(
+                "\\" + c if c in _escape_inside_entity else c for c in original
+            )
+            escaped = escaped.replace(placeholder_char, escaped_original)
 
     return escaped
 

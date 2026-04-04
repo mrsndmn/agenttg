@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -23,6 +24,21 @@ logger = logging.getLogger("agenttg")
 
 _MAX_RETRIES = 3
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _get_session() -> requests.Session:
+    """Return a module-level session configured with TELEGRAM_HTTPS_PROXY if set."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        proxy = os.environ.get("TELEGRAM_HTTPS_PROXY")
+        if proxy:
+            _session.proxies = {"https": proxy}
+            logger.info("Using TELEGRAM_HTTPS_PROXY")
+    return _session
+
+
+_session: requests.Session | None = None
 
 
 def _request_with_retry(method, url, **kwargs):
@@ -77,7 +93,7 @@ def send_photo(
     try:
         with open(png_path, "rb") as f:
             resp = _request_with_retry(
-                requests.post,
+                _get_session().post,
                 url,
                 data=data,
                 files={"photo": f},
@@ -124,7 +140,7 @@ def send_text_parts(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
+            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -135,7 +151,7 @@ def send_text_parts(
                 del payload_plain["parse_mode"]
                 try:
                     resp_retry = _request_with_retry(
-                        requests.post, url, json=payload_plain, timeout=10
+                        _get_session().post, url, json=payload_plain, timeout=10
                     )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
@@ -180,7 +196,7 @@ def send_reply(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
+            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code != 200:
                 logger.warning(
@@ -231,7 +247,7 @@ def send_reply_html(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
+            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -242,7 +258,7 @@ def send_reply_html(
                 del payload_plain["parse_mode"]
                 try:
                     resp_retry = _request_with_retry(
-                        requests.post, url, json=payload_plain, timeout=10
+                        _get_session().post, url, json=payload_plain, timeout=10
                     )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
@@ -393,7 +409,7 @@ def get_all_updates(
     next_offset = offset
     messages: list[tuple[str, str, int, int | None]] = []
     try:
-        resp = _request_with_retry(requests.get, url, timeout=timeout_sec + 10)
+        resp = _request_with_retry(_get_session().get, url, timeout=timeout_sec + 10)
         if resp.status_code != 200:
             return (next_offset, [])
         data = resp.json()
@@ -430,7 +446,7 @@ def set_message_reaction(
         "reaction": [{"type": "emoji", "emoji": emoji}],
     }
     try:
-        resp = _request_with_retry(requests.post, url, json=payload, timeout=10)
+        resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
         if resp.status_code != 200:
             logger.warning(
                 "setMessageReaction returned %s: %s",
@@ -445,7 +461,7 @@ def fetch_bot_username(token: str) -> str | None:
     """Call Telegram getMe API once to retrieve the bot username."""
     url = f"https://api.telegram.org/bot{token}/getMe"
     try:
-        resp = _request_with_retry(requests.get, url, timeout=10)
+        resp = _request_with_retry(_get_session().get, url, timeout=10)
         if resp.status_code != 200:
             logger.warning("getMe returned %s: %s", resp.status_code, resp.text[:200])
             return None

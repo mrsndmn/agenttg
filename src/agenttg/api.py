@@ -25,28 +25,22 @@ logger = logging.getLogger("agenttg")
 _MAX_RETRIES = 3
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-
-def _get_session() -> requests.Session:
-    """Return a module-level session configured with TELEGRAM_HTTPS_PROXY if set."""
-    global _session
-    if _session is None:
-        _session = requests.Session()
-        proxy = os.environ.get("TELEGRAM_HTTPS_PROXY")
-        if proxy:
-            _session.proxies = {"https": proxy}
-            logger.info("Using TELEGRAM_HTTPS_PROXY")
-    return _session
+def make_session() -> requests.Session:
+    """Create a new session configured with TELEGRAM_HTTPS_PROXY if set."""
+    session = requests.Session()
+    proxy = os.environ.get("TELEGRAM_HTTPS_PROXY")
+    if proxy:
+        session.proxies = {"https": proxy}
+        logger.info("Using TELEGRAM_HTTPS_PROXY for new session")
+    return session
 
 
-_session: requests.Session | None = None
-
-
-def _request_with_retry(method, url, **kwargs):
+def _request_with_retry(session, http_method, url, **kwargs):
     """Execute an HTTP request with exponential backoff retry on transient errors."""
     files = kwargs.get("files")
     for attempt in range(_MAX_RETRIES):
         try:
-            resp = method(url, **kwargs)
+            resp = getattr(session, http_method)(url, **kwargs)
             if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_RETRIES - 1:
                 return resp
             logger.warning(
@@ -80,8 +74,10 @@ def send_photo(
     delete_after_send: bool = True,
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
+    session: requests.Session | None = None,
 ) -> requests.Response | None:
     """Send an image file as a photo to the chat. Returns response or None on failure."""
+    s = session or make_session()
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     data: dict[str, object] = {"chat_id": chat_id}
     if caption:
@@ -93,7 +89,8 @@ def send_photo(
     try:
         with open(png_path, "rb") as f:
             resp = _request_with_retry(
-                _get_session().post,
+                s,
+                "post",
                 url,
                 data=data,
                 files={"photo": f},
@@ -122,8 +119,10 @@ def send_text_parts(
     add_part_prefix: bool,
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
+    session: requests.Session | None = None,
 ) -> list[requests.Response]:
     """Send text parts as Telegram messages with MarkdownV2. Optionally add [1/N] prefix."""
+    s = session or make_session()
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     result: list[requests.Response] = []
     for i, part in enumerate(parts):
@@ -140,7 +139,7 @@ def send_text_parts(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
+            resp = _request_with_retry(s, "post", url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -151,7 +150,7 @@ def send_text_parts(
                 del payload_plain["parse_mode"]
                 try:
                     resp_retry = _request_with_retry(
-                        _get_session().post, url, json=payload_plain, timeout=10
+                        s, "post", url, json=payload_plain, timeout=10
                     )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
@@ -179,8 +178,10 @@ def send_reply(
     text: str,
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
+    session: requests.Session | None = None,
 ) -> list[requests.Response]:
     """Send a plain-text reply to the chat, optionally replying to a message."""
+    s = session or make_session()
     parts = split_text(text, limit=TELEGRAM_TEXT_LIMIT)
     if not parts:
         return []
@@ -196,7 +197,7 @@ def send_reply(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
+            resp = _request_with_retry(s, "post", url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code != 200:
                 logger.warning(
@@ -215,8 +216,10 @@ def send_reply_html(
     html: str,
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
+    session: requests.Session | None = None,
 ) -> list[requests.Response]:
     """Send a reply with parse_mode=HTML."""
+    s = session or make_session()
     if not html.strip():
         return []
     limit = TELEGRAM_TEXT_LIMIT
@@ -247,7 +250,7 @@ def send_reply_html(
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:
-            resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
+            resp = _request_with_retry(s, "post", url, json=payload, timeout=10)
             result.append(resp)
             if resp.status_code == 400 and "can't parse entities" in resp.text.lower():
                 logger.warning(
@@ -258,7 +261,7 @@ def send_reply_html(
                 del payload_plain["parse_mode"]
                 try:
                     resp_retry = _request_with_retry(
-                        _get_session().post, url, json=payload_plain, timeout=10
+                        s, "post", url, json=payload_plain, timeout=10
                     )
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
@@ -287,6 +290,7 @@ def send_reply_markdown(
     reply_to_message_id: int | None = None,
     highlight_max: bool = False,
     thread_id: int | None = None,
+    session: requests.Session | None = None,
 ) -> list[requests.Response]:
     """Send a markdown reply with text/table segmentation and image support.
 
@@ -315,6 +319,7 @@ def send_reply_markdown(
                     add_part_prefix=len(parts) > 1,
                     reply_to_message_id=reply_id,
                     thread_id=thread_id,
+                    session=session,
                 )
             )
             first_message = False
@@ -329,6 +334,7 @@ def send_reply_markdown(
                     png_path,
                     reply_to_message_id=reply_to_message_id if first_message else None,
                     thread_id=thread_id,
+                    session=session,
                 )
                 if photo_resp is not None and photo_resp.status_code == 200:
                     all_responses.append(photo_resp)
@@ -351,6 +357,7 @@ def send_reply_markdown(
                         add_part_prefix=len(parts) > 1,
                         reply_to_message_id=reply_id,
                         thread_id=thread_id,
+                        session=session,
                     )
                 )
             first_message = False
@@ -367,6 +374,7 @@ def send_reply_markdown(
                 delete_after_send=False,
                 reply_to_message_id=reply_to_message_id if first_message else None,
                 thread_id=thread_id,
+                session=session,
             )
             if photo_resp is not None:
                 all_responses.append(photo_resp)
@@ -381,6 +389,7 @@ def send_reply_markdown(
                 add_part_prefix=False,
                 reply_to_message_id=reply_to_message_id,
                 thread_id=thread_id,
+                session=session,
             )
         )
 
@@ -392,9 +401,10 @@ def get_updates(
     chat_id: str,
     offset: int,
     timeout_sec: int = 30,
+    session: requests.Session | None = None,
 ) -> tuple[int, list[tuple[str, int, int | None]]]:
     """Long-poll getUpdates for the given chat_id."""
-    next_offset, all_msgs = get_all_updates(token, offset, timeout_sec)
+    next_offset, all_msgs = get_all_updates(token, offset, timeout_sec, session=session)
     messages = [(text, mid, uid) for cid, text, mid, uid in all_msgs if str(cid) == str(chat_id)]
     return (next_offset, messages)
 
@@ -403,13 +413,15 @@ def get_all_updates(
     token: str,
     offset: int,
     timeout_sec: int = 30,
+    session: requests.Session | None = None,
 ) -> tuple[int, list[tuple[str, str, int, int | None]]]:
     """Long-poll getUpdates for all chats."""
+    s = session or make_session()
     url = f"https://api.telegram.org/bot{token}/getUpdates?offset={offset}&timeout={timeout_sec}"
     next_offset = offset
     messages: list[tuple[str, str, int, int | None]] = []
     try:
-        resp = _request_with_retry(_get_session().get, url, timeout=timeout_sec + 10)
+        resp = _request_with_retry(s, "get", url, timeout=timeout_sec + 10)
         if resp.status_code != 200:
             return (next_offset, [])
         data = resp.json()
@@ -437,8 +449,10 @@ def set_message_reaction(
     chat_id: str,
     message_id: int,
     emoji: str = "\U0001f440",
+    session: requests.Session | None = None,
 ) -> None:
     """Set a reaction (e.g. eyes emoji) on a message. Silently no-ops on failure."""
+    s = session or make_session()
     url = f"https://api.telegram.org/bot{token}/setMessageReaction"
     payload = {
         "chat_id": chat_id,
@@ -446,7 +460,7 @@ def set_message_reaction(
         "reaction": [{"type": "emoji", "emoji": emoji}],
     }
     try:
-        resp = _request_with_retry(_get_session().post, url, json=payload, timeout=10)
+        resp = _request_with_retry(s, "post", url, json=payload, timeout=10)
         if resp.status_code != 200:
             logger.warning(
                 "setMessageReaction returned %s: %s",
@@ -457,11 +471,12 @@ def set_message_reaction(
         logger.warning("setMessageReaction failed: %s", exc)
 
 
-def fetch_bot_username(token: str) -> str | None:
+def fetch_bot_username(token: str, session: requests.Session | None = None) -> str | None:
     """Call Telegram getMe API once to retrieve the bot username."""
+    s = session or make_session()
     url = f"https://api.telegram.org/bot{token}/getMe"
     try:
-        resp = _request_with_retry(_get_session().get, url, timeout=10)
+        resp = _request_with_retry(s, "get", url, timeout=10)
         if resp.status_code != 200:
             logger.warning("getMe returned %s: %s", resp.status_code, resp.text[:200])
             return None

@@ -8,6 +8,13 @@ description: "agenttg Library Usage\nTRIGGER when: code imports `agenttg`, or us
 agenttg converts Markdown to Telegram-compatible formatting and provides
 a thin HTTP client for the Telegram Bot API.
 
+## Arkhip integration note
+
+In Arkhip (`research_loop`), prefer importing Telegram helpers from
+`research_loop.telegram.api`, `research_loop.telegram.parsing`, and
+`research_loop.telegram.constants`. The legacy `telegram_notify.py` module is
+kept as a backward-compatibility shim and should not be used in new code.
+
 This skill pairs well with the official **agent-sdk-dev** plugin when building
 Telegram-based agents with the Claude Agent SDK — use agenttg for message
 formatting and delivery, and agent-sdk-dev for the agent orchestration layer.

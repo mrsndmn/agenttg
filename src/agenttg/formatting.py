@@ -112,8 +112,27 @@ def format_markdown(text: str) -> str:
     table_lines: list[str] = []
 
     i = 0
+    in_code_block = False
     while i < len(lines):
         line = lines[i]
+
+        # Handle code blocks (triple backticks) — pass through unescaped
+        if line.strip().startswith("```"):
+            if in_code_block:
+                result.append("```")
+                in_code_block = False
+                i += 1
+                continue
+            else:
+                in_code_block = True
+                result.append(line.strip())
+                i += 1
+                continue
+
+        if in_code_block:
+            result.append(line)
+            i += 1
+            continue
 
         if line.strip().startswith("|"):
             if not in_table:
@@ -141,6 +160,10 @@ def format_markdown(text: str) -> str:
         escaped_line = escape_markdownv2(line)
         result.append(escaped_line)
         i += 1
+
+    if in_code_block:
+        # Unclosed code block — close it
+        result.append("```")
 
     if in_table:
         result.append("```")

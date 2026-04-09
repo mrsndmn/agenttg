@@ -25,13 +25,14 @@ logger = logging.getLogger("agenttg")
 _MAX_RETRIES = 3
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
+
 def make_session() -> requests.Session:
     """Create a new session configured with TELEGRAM_HTTPS_PROXY if set."""
     session = requests.Session()
     proxy = os.environ.get("TELEGRAM_HTTPS_PROXY")
     if proxy:
         session.proxies = {"https": proxy}
-        logger.info("Using TELEGRAM_HTTPS_PROXY for new session")
+    #         logger.info("Using TELEGRAM_HTTPS_PROXY for new session")
     return session
 
 
@@ -151,9 +152,7 @@ def send_text_parts(
                 payload_plain = payload.copy()
                 del payload_plain["parse_mode"]
                 try:
-                    resp_retry = _request_with_retry(
-                        s, "post", url, json=payload_plain, timeout=10
-                    )
+                    resp_retry = _request_with_retry(s, "post", url, json=payload_plain, timeout=10)
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
                         logger.warning(
@@ -262,9 +261,7 @@ def send_reply_html(
                 payload_plain = payload.copy()
                 del payload_plain["parse_mode"]
                 try:
-                    resp_retry = _request_with_retry(
-                        s, "post", url, json=payload_plain, timeout=10
-                    )
+                    resp_retry = _request_with_retry(s, "post", url, json=payload_plain, timeout=10)
                     result.append(resp_retry)
                     if resp_retry.status_code != 200:
                         logger.warning(

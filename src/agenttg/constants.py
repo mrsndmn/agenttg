@@ -27,3 +27,6 @@ _BARE_VIDEO_RE = re.compile(
     r"^\s*(?:[-*]\s+)?`?(?P<path>(?:/|\.{1,2}/)?[^\s`]+?\.(?:mp4|mov|avi|webm|mkv))`?\s*$",
     re.IGNORECASE,
 )
+_BARE_FILE_RE = re.compile(
+    r"^\s*(?:[-*]\s+)?`?(?P<path>(?:/|\.{1,2}/)?[^\s`]+?\.\w+)`?\s*$",
+)

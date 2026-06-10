@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from .constants import (
+    _BARE_FILE_RE,
     _BARE_IMAGE_RE,
     _BARE_VIDEO_RE,
     _HTTP_PREFIXES,
@@ -269,10 +270,53 @@ def parse_video_reference_line(line: str) -> ImageReference | None:
     return None
 
 
-def parse_media_reference_line(line: str) -> tuple[str, ImageReference | None]:
-    """Parse a line for any media reference (image or video).
+def _to_local_file_reference(raw_path: str, caption: str = "") -> ImageReference | None:
+    """Resolve a raw path to any local file (for document uploads)."""
+    candidate = raw_path.strip().strip('"').strip("'")
+    if not candidate:
+        return None
+    if candidate.startswith(_HTTP_PREFIXES):
+        return None
+    path = Path(candidate)
+    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+    if not path.suffix:
+        return None
+    if not path.is_file():
+        return None
+    return ImageReference(path=path, caption=caption.strip())
 
-    Returns (kind, reference) where kind is "image", "video", or "none".
+
+def parse_document_reference_line(line: str) -> ImageReference | None:
+    """Parse a single line for document file references.
+
+    Matches any local file path that is not an image or video.
+    Supports: ![caption](path), [caption](path), bare paths with an extension.
+    """
+    for regex in (_MD_IMAGE_RE, _MD_LINK_RE):
+        m = regex.match(line)
+        if m:
+            raw = m.group("path")
+            # Skip if it's an image or video extension
+            suffix = Path(raw.strip().strip('"').strip("'")).suffix.lower()
+            if suffix in _MEDIA_EXTENSIONS:
+                return None
+            return _to_local_file_reference(raw, m.group("caption"))
+
+    bare = _BARE_FILE_RE.match(line)
+    if bare:
+        raw = bare.group("path")
+        suffix = Path(raw).suffix.lower()
+        if suffix in _MEDIA_EXTENSIONS:
+            return None
+        return _to_local_file_reference(raw)
+
+    return None
+
+
+def parse_media_reference_line(line: str) -> tuple[str, ImageReference | None]:
+    """Parse a line for any media reference (image, video, or document).
+
+    Returns (kind, reference) where kind is "image", "video", "document", or "none".
     """
     ref = parse_video_reference_line(line)
     if ref is not None:
@@ -280,6 +324,9 @@ def parse_media_reference_line(line: str) -> tuple[str, ImageReference | None]:
     ref = parse_image_reference_line(line)
     if ref is not None:
         return ("image", ref)
+    ref = parse_document_reference_line(line)
+    if ref is not None:
+        return ("document", ref)
     return ("none", None)
 
 

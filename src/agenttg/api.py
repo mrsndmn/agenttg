@@ -161,6 +161,52 @@ def send_video(
                 video_path.unlink()
 
 
+def send_document(
+    token: str,
+    chat_id: str,
+    file_path: Path,
+    caption: str | None = None,
+    delete_after_send: bool = True,
+    reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
+    session: requests.Session | None = None,
+) -> requests.Response | None:
+    """Send a file as a document to the chat. Returns response or None on failure."""
+    s = session or make_session()
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    data: dict[str, object] = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption[:1024]
+    if reply_to_message_id is not None:
+        data["reply_to_message_id"] = reply_to_message_id
+    if thread_id is not None:
+        data["message_thread_id"] = thread_id
+    try:
+        with open(file_path, "rb") as f:
+            resp = _request_with_retry(
+                s,
+                "post",
+                url,
+                data=data,
+                files={"document": f},
+                timeout=120,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "Telegram sendDocument returned %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+        return resp
+    except (requests.RequestException, OSError) as exc:
+        logger.warning("Failed to send Telegram document: %s", exc)
+        return None
+    finally:
+        if delete_after_send and file_path.exists():
+            with suppress(OSError):
+                file_path.unlink()
+
+
 def send_text_parts(
     token: str,
     chat_id: str,
@@ -441,6 +487,24 @@ def send_reply_markdown(
             )
             if video_resp is not None:
                 all_responses.append(video_resp)
+            first_message = False
+        elif segment.kind == "document":
+            if segment.image is None:
+                continue
+            doc_ref = segment.image
+            caption = doc_ref.caption or doc_ref.path.name
+            doc_resp = send_document(
+                token=token,
+                chat_id=chat_id,
+                file_path=doc_ref.path,
+                caption=caption,
+                delete_after_send=False,
+                reply_to_message_id=reply_to_message_id if first_message else None,
+                thread_id=thread_id,
+                session=session,
+            )
+            if doc_resp is not None:
+                all_responses.append(doc_resp)
             first_message = False
 
     if first_message:

@@ -1,4 +1,4 @@
-"""Telegram HTTP API calls: send messages, photos, reactions, and poll updates."""
+"""Telegram HTTP API calls: send messages, photos, videos, reactions, and poll updates."""
 
 from __future__ import annotations
 
@@ -113,6 +113,52 @@ def send_photo(
         if delete_after_send and png_path.exists():
             with suppress(OSError):
                 png_path.unlink()
+
+
+def send_video(
+    token: str,
+    chat_id: str,
+    video_path: Path,
+    caption: str | None = None,
+    delete_after_send: bool = True,
+    reply_to_message_id: int | None = None,
+    thread_id: int | None = None,
+    session: requests.Session | None = None,
+) -> requests.Response | None:
+    """Send a video file to the chat. Returns response or None on failure."""
+    s = session or make_session()
+    url = f"https://api.telegram.org/bot{token}/sendVideo"
+    data: dict[str, object] = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption[:1024]
+    if reply_to_message_id is not None:
+        data["reply_to_message_id"] = reply_to_message_id
+    if thread_id is not None:
+        data["message_thread_id"] = thread_id
+    try:
+        with open(video_path, "rb") as f:
+            resp = _request_with_retry(
+                s,
+                "post",
+                url,
+                data=data,
+                files={"video": f},
+                timeout=120,
+            )
+        if resp.status_code != 200:
+            logger.warning(
+                "Telegram sendVideo returned %s: %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+        return resp
+    except (requests.RequestException, OSError) as exc:
+        logger.warning("Failed to send Telegram video: %s", exc)
+        return None
+    finally:
+        if delete_after_send and video_path.exists():
+            with suppress(OSError):
+                video_path.unlink()
 
 
 def send_text_parts(

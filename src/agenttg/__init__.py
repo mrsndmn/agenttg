@@ -10,6 +10,7 @@ from .api import (
     send_reply_html,
     send_reply_markdown,
     send_text_parts,
+    send_video,
     set_message_reaction,
 )
 from .constants import TELEGRAM_TEXT_LIMIT
@@ -42,6 +43,7 @@ __all__ = [
     "send_reply_html",
     "send_reply_markdown",
     "send_text_parts",
+    "send_video",
     "set_message_reaction",
     "split_body_into_segments",
     "split_text",

@@ -382,14 +382,16 @@ def send_reply_markdown(
     highlight_max: bool = False,
     thread_id: int | None = None,
     session: requests.Session | None = None,
+    workdir: Path | None = None,
 ) -> list[requests.Response]:
-    """Send a markdown reply with text/table segmentation and image support.
+    """Send a markdown reply with text/table segmentation and media support.
 
     Tables are rendered as PNG images via pandoc + wkhtmltoimage.
     Falls back to code blocks if rendering tools are not available.
+    *workdir* overrides ``Path.cwd()`` when resolving relative media paths.
     """
     body = (body or "").strip() or "(no response)"
-    segments = split_body_into_segments(body)
+    segments = split_body_into_segments(body, workdir=workdir)
     all_responses: list[requests.Response] = []
     max_prefix_len = 12
     first_message = True

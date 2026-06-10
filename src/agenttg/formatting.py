@@ -201,12 +201,16 @@ def escape_html(text: str) -> str:
 
 
 def _to_local_media_reference(
-    raw_path: str, caption: str = "", allowed_extensions: set[str] = _MEDIA_EXTENSIONS
+    raw_path: str,
+    caption: str = "",
+    allowed_extensions: set[str] = _MEDIA_EXTENSIONS,
+    workdir: Path | None = None,
 ) -> ImageReference | None:
     """Resolve a raw path to a local media file reference.
 
     Returns an ImageReference if the path points to a local file with a
-    matching extension, or None otherwise.
+    matching extension, or None otherwise.  *workdir* overrides ``Path.cwd()``
+    for resolving relative paths.
     """
     candidate = raw_path.strip().strip('"').strip("'")
     if not candidate:
@@ -214,7 +218,8 @@ def _to_local_media_reference(
     if candidate.startswith(_HTTP_PREFIXES):
         return None
     path = Path(candidate)
-    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+    base = workdir if workdir is not None else Path.cwd()
+    path = (base / path).resolve() if not path.is_absolute() else path.resolve()
     if path.suffix.lower() not in allowed_extensions:
         return None
     if not path.is_file():
@@ -222,31 +227,37 @@ def _to_local_media_reference(
     return ImageReference(path=path, caption=caption.strip())
 
 
-def _to_local_image_reference(raw_path: str, caption: str = "") -> ImageReference | None:
-    return _to_local_media_reference(raw_path, caption, _IMAGE_EXTENSIONS)
+def _to_local_image_reference(
+    raw_path: str, caption: str = "", workdir: Path | None = None
+) -> ImageReference | None:
+    return _to_local_media_reference(raw_path, caption, _IMAGE_EXTENSIONS, workdir=workdir)
 
 
-def parse_image_reference_line(line: str) -> ImageReference | None:
+def parse_image_reference_line(line: str, workdir: Path | None = None) -> ImageReference | None:
     """Parse a single line for image references.
 
     Supports: ![caption](path), [caption](path), bare paths ending in image extensions.
     """
     md_image = _MD_IMAGE_RE.match(line)
     if md_image:
-        return _to_local_image_reference(md_image.group("path"), md_image.group("caption"))
+        return _to_local_image_reference(
+            md_image.group("path"), md_image.group("caption"), workdir=workdir
+        )
 
     md_link = _MD_LINK_RE.match(line)
     if md_link:
-        return _to_local_image_reference(md_link.group("path"), md_link.group("caption"))
+        return _to_local_image_reference(
+            md_link.group("path"), md_link.group("caption"), workdir=workdir
+        )
 
     bare = _BARE_IMAGE_RE.match(line)
     if bare:
-        return _to_local_image_reference(bare.group("path"))
+        return _to_local_image_reference(bare.group("path"), workdir=workdir)
 
     return None
 
 
-def parse_video_reference_line(line: str) -> ImageReference | None:
+def parse_video_reference_line(line: str, workdir: Path | None = None) -> ImageReference | None:
     """Parse a single line for video references.
 
     Supports: ![caption](path), [caption](path), bare paths ending in video extensions.
@@ -254,23 +265,27 @@ def parse_video_reference_line(line: str) -> ImageReference | None:
     md_image = _MD_IMAGE_RE.match(line)
     if md_image:
         return _to_local_media_reference(
-            md_image.group("path"), md_image.group("caption"), _VIDEO_EXTENSIONS
+            md_image.group("path"), md_image.group("caption"), _VIDEO_EXTENSIONS, workdir=workdir
         )
 
     md_link = _MD_LINK_RE.match(line)
     if md_link:
         return _to_local_media_reference(
-            md_link.group("path"), md_link.group("caption"), _VIDEO_EXTENSIONS
+            md_link.group("path"), md_link.group("caption"), _VIDEO_EXTENSIONS, workdir=workdir
         )
 
     bare = _BARE_VIDEO_RE.match(line)
     if bare:
-        return _to_local_media_reference(bare.group("path"), allowed_extensions=_VIDEO_EXTENSIONS)
+        return _to_local_media_reference(
+            bare.group("path"), allowed_extensions=_VIDEO_EXTENSIONS, workdir=workdir
+        )
 
     return None
 
 
-def _to_local_file_reference(raw_path: str, caption: str = "") -> ImageReference | None:
+def _to_local_file_reference(
+    raw_path: str, caption: str = "", workdir: Path | None = None
+) -> ImageReference | None:
     """Resolve a raw path to any local file (for document uploads)."""
     candidate = raw_path.strip().strip('"').strip("'")
     if not candidate:
@@ -278,7 +293,8 @@ def _to_local_file_reference(raw_path: str, caption: str = "") -> ImageReference
     if candidate.startswith(_HTTP_PREFIXES):
         return None
     path = Path(candidate)
-    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+    base = workdir if workdir is not None else Path.cwd()
+    path = (base / path).resolve() if not path.is_absolute() else path.resolve()
     if not path.suffix:
         return None
     if not path.is_file():
@@ -286,7 +302,7 @@ def _to_local_file_reference(raw_path: str, caption: str = "") -> ImageReference
     return ImageReference(path=path, caption=caption.strip())
 
 
-def parse_document_reference_line(line: str) -> ImageReference | None:
+def parse_document_reference_line(line: str, workdir: Path | None = None) -> ImageReference | None:
     """Parse a single line for document file references.
 
     Matches any local file path that is not an image or video.
@@ -300,7 +316,7 @@ def parse_document_reference_line(line: str) -> ImageReference | None:
             suffix = Path(raw.strip().strip('"').strip("'")).suffix.lower()
             if suffix in _MEDIA_EXTENSIONS:
                 return None
-            return _to_local_file_reference(raw, m.group("caption"))
+            return _to_local_file_reference(raw, m.group("caption"), workdir=workdir)
 
     bare = _BARE_FILE_RE.match(line)
     if bare:
@@ -308,30 +324,32 @@ def parse_document_reference_line(line: str) -> ImageReference | None:
         suffix = Path(raw).suffix.lower()
         if suffix in _MEDIA_EXTENSIONS:
             return None
-        return _to_local_file_reference(raw)
+        return _to_local_file_reference(raw, workdir=workdir)
 
     return None
 
 
-def parse_media_reference_line(line: str) -> tuple[str, ImageReference | None]:
+def parse_media_reference_line(
+    line: str, workdir: Path | None = None
+) -> tuple[str, ImageReference | None]:
     """Parse a line for any media reference (image, video, or document).
 
     Returns (kind, reference) where kind is "image", "video", "document", or "none".
     """
-    ref = parse_video_reference_line(line)
+    ref = parse_video_reference_line(line, workdir=workdir)
     if ref is not None:
         return ("video", ref)
-    ref = parse_image_reference_line(line)
+    ref = parse_image_reference_line(line, workdir=workdir)
     if ref is not None:
         return ("image", ref)
-    ref = parse_document_reference_line(line)
+    ref = parse_document_reference_line(line, workdir=workdir)
     if ref is not None:
         return ("document", ref)
     return ("none", None)
 
 
-def split_body_into_segments(body: str) -> list[BodySegment]:
-    """Split body into alternating text, table, image, and video segments."""
+def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
+    """Split body into alternating text, table, image, video, and document segments."""
     lines = body.split("\n")
     segments: list[BodySegment] = []
     text_lines: list[str] = []
@@ -351,7 +369,7 @@ def split_body_into_segments(body: str) -> list[BodySegment]:
                 i += 1
             segments.append(BodySegment(kind="table", content="\n".join(table_lines)))
         else:
-            kind, media_ref = parse_media_reference_line(lines[i])
+            kind, media_ref = parse_media_reference_line(lines[i], workdir=workdir)
             if media_ref is not None:
                 flush_text()
                 segments.append(BodySegment(kind=kind, image=media_ref))

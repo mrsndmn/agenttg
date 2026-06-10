@@ -7,12 +7,15 @@ from pathlib import Path
 
 from .constants import (
     _BARE_IMAGE_RE,
+    _BARE_VIDEO_RE,
     _HTTP_PREFIXES,
     _IMAGE_EXTENSIONS,
     _MARKDOWNV2_ESCAPE_CHARS,
     _MD_IMAGE_RE,
     _MD_LINK_RE,
+    _MEDIA_EXTENSIONS,
     _PLACEHOLDER_BASE,
+    _VIDEO_EXTENSIONS,
     TELEGRAM_TEXT_LIMIT,
 )
 from .types import BodySegment, ImageReference
@@ -196,7 +199,14 @@ def escape_html(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _to_local_image_reference(raw_path: str, caption: str = "") -> ImageReference | None:
+def _to_local_media_reference(
+    raw_path: str, caption: str = "", allowed_extensions: set[str] = _MEDIA_EXTENSIONS
+) -> ImageReference | None:
+    """Resolve a raw path to a local media file reference.
+
+    Returns an ImageReference if the path points to a local file with a
+    matching extension, or None otherwise.
+    """
     candidate = raw_path.strip().strip('"').strip("'")
     if not candidate:
         return None
@@ -204,11 +214,15 @@ def _to_local_image_reference(raw_path: str, caption: str = "") -> ImageReferenc
         return None
     path = Path(candidate)
     path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
-    if path.suffix.lower() not in _IMAGE_EXTENSIONS:
+    if path.suffix.lower() not in allowed_extensions:
         return None
     if not path.is_file():
         return None
     return ImageReference(path=path, caption=caption.strip())
+
+
+def _to_local_image_reference(raw_path: str, caption: str = "") -> ImageReference | None:
+    return _to_local_media_reference(raw_path, caption, _IMAGE_EXTENSIONS)
 
 
 def parse_image_reference_line(line: str) -> ImageReference | None:
@@ -231,8 +245,46 @@ def parse_image_reference_line(line: str) -> ImageReference | None:
     return None
 
 
+def parse_video_reference_line(line: str) -> ImageReference | None:
+    """Parse a single line for video references.
+
+    Supports: ![caption](path), [caption](path), bare paths ending in video extensions.
+    """
+    md_image = _MD_IMAGE_RE.match(line)
+    if md_image:
+        return _to_local_media_reference(
+            md_image.group("path"), md_image.group("caption"), _VIDEO_EXTENSIONS
+        )
+
+    md_link = _MD_LINK_RE.match(line)
+    if md_link:
+        return _to_local_media_reference(
+            md_link.group("path"), md_link.group("caption"), _VIDEO_EXTENSIONS
+        )
+
+    bare = _BARE_VIDEO_RE.match(line)
+    if bare:
+        return _to_local_media_reference(bare.group("path"), allowed_extensions=_VIDEO_EXTENSIONS)
+
+    return None
+
+
+def parse_media_reference_line(line: str) -> tuple[str, ImageReference | None]:
+    """Parse a line for any media reference (image or video).
+
+    Returns (kind, reference) where kind is "image", "video", or "none".
+    """
+    ref = parse_video_reference_line(line)
+    if ref is not None:
+        return ("video", ref)
+    ref = parse_image_reference_line(line)
+    if ref is not None:
+        return ("image", ref)
+    return ("none", None)
+
+
 def split_body_into_segments(body: str) -> list[BodySegment]:
-    """Split body into alternating text, table, and image segments."""
+    """Split body into alternating text, table, image, and video segments."""
     lines = body.split("\n")
     segments: list[BodySegment] = []
     text_lines: list[str] = []
@@ -252,10 +304,10 @@ def split_body_into_segments(body: str) -> list[BodySegment]:
                 i += 1
             segments.append(BodySegment(kind="table", content="\n".join(table_lines)))
         else:
-            image_ref = parse_image_reference_line(lines[i])
-            if image_ref is not None:
+            kind, media_ref = parse_media_reference_line(lines[i])
+            if media_ref is not None:
                 flush_text()
-                segments.append(BodySegment(kind="image", image=image_ref))
+                segments.append(BodySegment(kind=kind, image=media_ref))
                 i += 1
                 continue
             text_lines.append(lines[i])

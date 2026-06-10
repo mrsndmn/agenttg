@@ -19,6 +19,8 @@ from .formatting import (
     escape_markdownv2,
     format_markdown,
     parse_image_reference_line,
+    parse_media_reference_line,
+    parse_video_reference_line,
     split_body_into_segments,
     split_text,
 )
@@ -38,6 +40,8 @@ __all__ = [
     "make_session",
     "md_table_to_png",
     "parse_image_reference_line",
+    "parse_media_reference_line",
+    "parse_video_reference_line",
     "send_photo",
     "send_reply",
     "send_reply_html",

@@ -14,10 +14,16 @@ _MARKDOWNV2_ESCAPE_CHARS = set("_*[]()~`>#+-=|{}.!")
 _PLACEHOLDER_BASE = 0xE000
 
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+_MEDIA_EXTENSIONS = _IMAGE_EXTENSIONS | _VIDEO_EXTENSIONS
 _HTTP_PREFIXES = ("http://", "https://")
 _MD_IMAGE_RE = re.compile(r"^\s*(?:[-*]\s+)?!\[(?P<caption>[^\]]*)\]\((?P<path>[^)]+)\)\s*$")
 _MD_LINK_RE = re.compile(r"^\s*(?:[-*]\s+)?\[(?P<caption>[^\]]+)\]\((?P<path>[^)]+)\)\s*$")
 _BARE_IMAGE_RE = re.compile(
     r"^\s*(?:[-*]\s+)?`?(?P<path>(?:/|\.{1,2}/)?[^\s`]+?\.(?:png|jpg|jpeg|webp))`?\s*$",
+    re.IGNORECASE,
+)
+_BARE_VIDEO_RE = re.compile(
+    r"^\s*(?:[-*]\s+)?`?(?P<path>(?:/|\.{1,2}/)?[^\s`]+?\.(?:mp4|mov|avi|webm|mkv))`?\s*$",
     re.IGNORECASE,
 )

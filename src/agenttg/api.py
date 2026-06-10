@@ -424,6 +424,24 @@ def send_reply_markdown(
             if photo_resp is not None:
                 all_responses.append(photo_resp)
             first_message = False
+        elif segment.kind == "video":
+            if segment.image is None:
+                continue
+            video_ref = segment.image
+            caption = video_ref.caption or video_ref.path.name
+            video_resp = send_video(
+                token=token,
+                chat_id=chat_id,
+                video_path=video_ref.path,
+                caption=caption,
+                delete_after_send=False,
+                reply_to_message_id=reply_to_message_id if first_message else None,
+                thread_id=thread_id,
+                session=session,
+            )
+            if video_resp is not None:
+                all_responses.append(video_resp)
+            first_message = False
 
     if first_message:
         all_responses.extend(

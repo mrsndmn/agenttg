@@ -21,6 +21,19 @@ from .constants import (
 )
 from .types import BodySegment, ImageReference
 
+# Characters that must be backslash-escaped inside a MarkdownV2 entity's text
+# (bold / underline / link text). This is the full set of MarkdownV2 specials,
+# including the entity delimiters themselves: each entity's inner text never
+# contains its own delimiter (regex-guaranteed), so escaping a delimiter that is
+# absent is a harmless no-op, while every other special (notably "_" in URLs)
+# is escaped so Telegram does not mis-parse it.
+_ENTITY_CONTENT_ESCAPE = set("_*[]()~`>#+-=|{}.!\\")
+
+
+def _escape_entity_content(text: str) -> str:
+    """Backslash-escape MarkdownV2 special chars inside an entity's text."""
+    return "".join("\\" + c if c in _ENTITY_CONTENT_ESCAPE else c for c in text)
+
 
 def escape_markdownv2(text: str) -> str:
     """Escape special characters for Telegram MarkdownV2, preserving markdown entities.
@@ -42,15 +55,20 @@ def escape_markdownv2(text: str) -> str:
 
     def protect_code(m: re.Match[str]) -> str:
         ph = make_placeholder()
-        placeholders[ph] = m.group(0)
+        # Inside a code entity only "\" and "`" are special; the regex already
+        # excludes "`", so just escape backslashes. Other chars stay literal.
+        inner = m.group(0)[1:-1].replace("\\", "\\\\")
+        placeholders[ph] = f"`{inner}`"
         return ph
 
     protected_text = re.sub(r"`[^`]+`", protect_code, protected_text)
 
     def protect_bold(m: re.Match[str]) -> str:
         ph = make_placeholder()
-        # Convert standard Markdown **bold** to MarkdownV2 *bold*
-        inner = m.group(0)[2:-2]
+        # Convert standard Markdown **bold** to MarkdownV2 *bold*, escaping
+        # specials inside the entity (e.g. "_" in a URL) so Telegram does not
+        # mis-parse them. The regex guarantees no "*" in the inner text.
+        inner = _escape_entity_content(m.group(0)[2:-2])
         placeholders[ph] = f"*{inner}*"
         return ph
 
@@ -58,7 +76,10 @@ def escape_markdownv2(text: str) -> str:
 
     def protect_underline(m: re.Match[str]) -> str:
         ph = make_placeholder()
-        placeholders[ph] = m.group(0)
+        # Escape specials inside the underline entity. The regex guarantees no
+        # "_" in the inner text, so the "__" delimiters stay intact.
+        inner = _escape_entity_content(m.group(0)[2:-2])
+        placeholders[ph] = f"__{inner}__"
         return ph
 
     protected_text = re.sub(r"__[^_]+__", protect_underline, protected_text)
@@ -69,9 +90,8 @@ def escape_markdownv2(text: str) -> str:
         # text and URL contents are escaped separately.
         text = m.group(1)
         url = m.group(2)
-        _escape_in_link_text = set("_*[]()~`>#+-=|{}.!\\")
         _escape_in_url = set(")\\")
-        escaped_text = "".join("\\" + c if c in _escape_in_link_text else c for c in text)
+        escaped_text = _escape_entity_content(text)
         escaped_url = "".join("\\" + c if c in _escape_in_url else c for c in url)
         placeholders[ph] = f"[{escaped_text}]({escaped_url})"
         return ph
@@ -88,16 +108,10 @@ def escape_markdownv2(text: str) -> str:
             result.append(char)
     escaped = "".join(result)
 
-    _escape_inside_entity = set("()\\.[]~>#+-=|{}!")
+    # Every placeholder's replacement is fully escaped at protection time, so
+    # insert them verbatim — escaping here would double-escape entity content.
     for placeholder_char, original in reversed(list(placeholders.items())):
-        # Links are pre-escaped during protection; insert as-is.
-        if original.startswith("[") and "](" in original and original.endswith(")"):
-            escaped = escaped.replace(placeholder_char, original)
-        else:
-            escaped_original = "".join(
-                "\\" + c if c in _escape_inside_entity else c for c in original
-            )
-            escaped = escaped.replace(placeholder_char, escaped_original)
+        escaped = escaped.replace(placeholder_char, original)
 
     return escaped
 

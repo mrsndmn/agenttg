@@ -103,6 +103,56 @@ def test_escape_markdownv2_special_chars():
     assert "\\)" in out
 
 
+def test_escape_markdownv2_bold_url_with_underscore():
+    """Regression: an https URL inside **bold** must have its "_" escaped.
+
+    A bare "_" inside a bold entity opens an italic span that never closes, so
+    Telegram rejects the whole message with "can't parse entities". The "_" must
+    be backslash-escaped while the surrounding "*" bold markers stay intact.
+    """
+    text = "**https://gitlab.2a2i.org/group/-/merge_requests/21**"
+    out = escape_markdownv2(text)
+    assert "\\_" in out, "underscore inside bold URL was not escaped"
+    assert "merge_requests" not in out, "raw (unescaped) underscore survived"
+    assert "merge\\_requests" in out
+    # Bold delimiters preserved and not escaped away.
+    assert out.startswith("*") and out.endswith("*")
+    assert "\\*" not in out
+
+
+def test_escape_markdownv2_bold_specials_are_escaped():
+    """Every special char inside a bold entity is escaped, delimiters intact."""
+    out = escape_markdownv2("**a_b-c.d!e**")
+    assert out == "*a\\_b\\-c\\.d\\!e*"
+
+
+def test_escape_markdownv2_underline_url_with_underscore():
+    """Underscore inside an __underline__ entity must be escaped too."""
+    out = escape_markdownv2("__see foo.bar-baz here__")
+    assert out.startswith("__") and out.endswith("__")
+    assert "foo\\.bar\\-baz" in out
+    # The "__" delimiters themselves must not be escaped.
+    assert not out.startswith("\\")
+
+
+def test_format_markdown_bold_url_with_underscore_is_escaped():
+    """End-to-end: the MR-link message shape must escape the URL underscore."""
+    msg = (
+        "# MR link\n"
+        "**https://gitlab.2a2i.org/fusionbrain/multimodal/research-agent/"
+        "arkhip/-/merge_requests/21**"
+    )
+    out = format_markdown(msg)
+    assert "merge\\_requests" in out
+    assert "merge_requests" not in out
+
+
+def test_escape_markdownv2_code_content_not_overescaped():
+    """Code-span content must stay literal — no spurious backslashes."""
+    out = escape_markdownv2("see `foo.bar-baz_qux` now")
+    assert "`foo.bar-baz_qux`" in out, f"code content was over-escaped: {out!r}"
+
+
 # ---------------------------------------------------------------------------
 # format_markdown tests
 # ---------------------------------------------------------------------------

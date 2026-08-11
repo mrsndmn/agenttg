@@ -88,6 +88,34 @@ def test_send_table_as_png(telegram_token, telegram_chat_id):
     assert resp.json()["ok"] is True
 
 
+def test_send_table_as_rich_message(telegram_token, telegram_chat_id):
+    """Send a markdown table as a native rich message (Bot API 10.2)."""
+    table_md = (
+        "| Model | Accuracy | F1 |\n"
+        "|-------|---------:|----:|\n"
+        "| A     | 95.2     | 0.94|\n"
+        "| B     | 92.1     | 0.91|"
+    )
+    resp = agenttg.send_rich_markdown(telegram_token, telegram_chat_id, table_md)
+    assert resp is not None
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+
+def test_send_reply_markdown_rich_tables(telegram_token, telegram_chat_id):
+    """The rich chain delivers text and tables as separate messages."""
+    result = agenttg.send_reply_markdown(
+        telegram_token,
+        telegram_chat_id,
+        FINAL_OUTPUT_MESSAGE.strip(),
+        table_mode="rich",
+    )
+    assert len(result) >= 2
+    for resp in result:
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["ok"] is True
+
+
 def test_fetch_bot_username(telegram_token):
     """Fetch bot username via getMe API."""
     username = agenttg.fetch_bot_username(telegram_token)

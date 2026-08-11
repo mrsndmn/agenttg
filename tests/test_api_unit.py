@@ -330,10 +330,10 @@ def test_fetch_bot_username_failure(mock_session):
 # ---------------------------------------------------------------------------
 
 
-@patch("agenttg.api.time.sleep")
+@patch("agenttg.transport.time.sleep")
 def test_request_with_retry_retries_on_connection_error(mock_sleep):
     """Retry should be attempted on transient connection errors."""
-    import agenttg.api as api
+    import agenttg.transport as transport
 
     session = MagicMock(spec=requests.Session)
     session.post.side_effect = [
@@ -341,19 +341,19 @@ def test_request_with_retry_retries_on_connection_error(mock_sleep):
         _make_ok_response(),
     ]
 
-    resp = api._request_with_retry(session, "post", "http://example.com", timeout=5)
+    resp = transport._request_with_retry(session, "post", "http://example.com", timeout=5)
     assert resp.status_code == 200
     assert session.post.call_count == 2
 
 
-@patch("agenttg.api.time.sleep")
+@patch("agenttg.transport.time.sleep")
 def test_request_with_retry_raises_after_max_retries(mock_sleep):
     """Should raise after exhausting all retry attempts."""
-    import agenttg.api as api
+    import agenttg.transport as transport
 
     session = MagicMock(spec=requests.Session)
     session.post.side_effect = requests.ConnectionError("SSL EOF")
 
     with pytest.raises(requests.ConnectionError):
-        api._request_with_retry(session, "post", "http://example.com", timeout=5)
-    assert session.post.call_count == api._MAX_RETRIES
+        transport._request_with_retry(session, "post", "http://example.com", timeout=5)
+    assert session.post.call_count == transport._MAX_RETRIES

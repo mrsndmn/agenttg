@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import time
 from contextlib import suppress
 from pathlib import Path
 
@@ -18,55 +16,15 @@ from .formatting import (
     split_body_into_segments,
     split_text,
 )
+from .rich_message import rich_table_within_limits, send_rich_markdown
+from .table_modes import table_render_chain
 from .table_to_png import md_table_to_png
+from .transport import _request_with_retry, make_session
 
 logger = logging.getLogger("agenttg")
 
-_MAX_RETRIES = 3
-_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
-
-
-def make_session() -> requests.Session:
-    """Create a new session configured with TELEGRAM_HTTPS_PROXY if set."""
-    session = requests.Session()
-    proxy = os.environ.get("TELEGRAM_HTTPS_PROXY")
-    if proxy:
-        session.proxies = {"https": proxy}
-    #         logger.info("Using TELEGRAM_HTTPS_PROXY for new session")
-    return session
-
-
-def _request_with_retry(session, http_method, url, **kwargs):
-    """Execute an HTTP request with exponential backoff retry on transient errors."""
-    files = kwargs.get("files")
-    for attempt in range(_MAX_RETRIES):
-        try:
-            resp = getattr(session, http_method)(url, **kwargs)
-            if resp.status_code not in _RETRY_STATUSES or attempt == _MAX_RETRIES - 1:
-                return resp
-            logger.warning(
-                "Telegram API %s returned %s (body: %s), retry %d/%d",
-                url.rsplit("/", 1)[-1],
-                resp.status_code,
-                resp.text[:200],
-                attempt + 1,
-                _MAX_RETRIES - 1,
-            )
-        except requests.RequestException as exc:
-            if attempt == _MAX_RETRIES - 1:
-                raise
-            logger.warning(
-                "Telegram API %s request failed: %s, retry %d/%d",
-                url.rsplit("/", 1)[-1],
-                exc,
-                attempt + 1,
-                _MAX_RETRIES - 1,
-            )
-        if files:
-            for f in files.values():
-                if hasattr(f, "seek"):
-                    f.seek(0)
-        time.sleep(2**attempt)
+#: Room reserved in every text part for the optional "[i/N]" part prefix.
+_MAX_PREFIX_LEN = 12
 
 
 def send_photo(
@@ -374,6 +332,123 @@ def send_reply_html(
     return result
 
 
+def _send_table_as_code_block(
+    token: str,
+    chat_id: str,
+    content: str,
+    reply_to_message_id: int | None,
+    thread_id: int | None,
+    session: requests.Session | None,
+) -> list[requests.Response]:
+    """Send a markdown table verbatim inside a fixed-width code block."""
+    code_block = f"```\n{content}\n```"
+    parts = split_text(code_block, limit=TELEGRAM_TEXT_LIMIT - _MAX_PREFIX_LEN)
+    return send_text_parts(
+        token,
+        chat_id,
+        parts,
+        add_part_prefix=len(parts) > 1,
+        reply_to_message_id=reply_to_message_id,
+        thread_id=thread_id,
+        session=session,
+    )
+
+
+def _send_table_as_photo(
+    token: str,
+    chat_id: str,
+    content: str,
+    reply_to_message_id: int | None,
+    thread_id: int | None,
+    session: requests.Session | None,
+    highlight_max: bool,
+) -> list[requests.Response] | None:
+    """Render a table to PNG and send it. Returns None when the render/send failed."""
+    try:
+        png_path = md_table_to_png(content, output_path=None, highlight_max=highlight_max)
+    except (RuntimeError, OSError) as exc:
+        logger.warning("Table-to-PNG failed: %s", exc)
+        return None
+    resp = send_photo(
+        token,
+        chat_id,
+        png_path,
+        reply_to_message_id=reply_to_message_id,
+        thread_id=thread_id,
+        session=session,
+    )
+    if resp is None or resp.status_code != 200:
+        logger.warning("sendPhoto failed (%s)", "no response" if resp is None else resp.status_code)
+        return None
+    return [resp]
+
+
+def _send_table_as_rich(
+    token: str,
+    chat_id: str,
+    content: str,
+    reply_to_message_id: int | None,
+    thread_id: int | None,
+    session: requests.Session | None,
+) -> list[requests.Response] | None:
+    """Send a table as a native rich message. Returns None when it was not sent."""
+    fits, reason = rich_table_within_limits(content)
+    if not fits:
+        logger.warning("Table exceeds rich message limits (%s)", reason)
+        return None
+    resp = send_rich_markdown(
+        token,
+        chat_id,
+        content,
+        reply_to_message_id=reply_to_message_id,
+        thread_id=thread_id,
+        session=session,
+    )
+    if resp is None or resp.status_code != 200:
+        return None
+    return [resp]
+
+
+def _send_table_segment(
+    token: str,
+    chat_id: str,
+    content: str,
+    reply_to_message_id: int | None,
+    thread_id: int | None,
+    session: requests.Session | None,
+    highlight_max: bool,
+    table_mode: str | None,
+) -> list[requests.Response]:
+    """Deliver one table segment, walking the configured render chain.
+
+    The first renderer that succeeds wins; ``code`` terminates every chain, so a
+    table is never dropped because pandoc is missing or the rich API refused it.
+    """
+    for mode in table_render_chain(table_mode):
+        if mode == "code":
+            return _send_table_as_code_block(
+                token, chat_id, content, reply_to_message_id, thread_id, session
+            )
+        if mode == "image":
+            sent = _send_table_as_photo(
+                token,
+                chat_id,
+                content,
+                reply_to_message_id,
+                thread_id,
+                session,
+                highlight_max,
+            )
+        else:
+            sent = _send_table_as_rich(
+                token, chat_id, content, reply_to_message_id, thread_id, session
+            )
+        if sent is not None:
+            return sent
+        logger.warning("Table render mode %r failed, trying the next renderer", mode)
+    return []
+
+
 def send_reply_markdown(
     token: str,
     chat_id: str,
@@ -383,17 +458,20 @@ def send_reply_markdown(
     thread_id: int | None = None,
     session: requests.Session | None = None,
     workdir: Path | None = None,
+    table_mode: str | None = None,
 ) -> list[requests.Response]:
     """Send a markdown reply with text/table segmentation and media support.
 
-    Tables are rendered as PNG images via pandoc + wkhtmltoimage.
-    Falls back to code blocks if rendering tools are not available.
+    Each table is sent as its own message, rendered according to *table_mode*
+    (``image``, ``rich``, or ``code``; default from ``AGENTTG_TABLE_MODE``, see
+    :mod:`agenttg.table_modes`), falling through to the next renderer in the
+    chain on failure.
     *workdir* overrides ``Path.cwd()`` when resolving relative media paths.
     """
     body = (body or "").strip() or "(no response)"
     segments = split_body_into_segments(body, workdir=workdir)
     all_responses: list[requests.Response] = []
-    max_prefix_len = 12
+    max_prefix_len = _MAX_PREFIX_LEN
     first_message = True
 
     for segment in segments:
@@ -417,42 +495,18 @@ def send_reply_markdown(
             )
             first_message = False
         elif segment.kind == "table":
-            content = segment.content
-            photo_sent = False
-            try:
-                png_path = md_table_to_png(content, output_path=None, highlight_max=highlight_max)
-                photo_resp = send_photo(
+            all_responses.extend(
+                _send_table_segment(
                     token,
                     chat_id,
-                    png_path,
-                    reply_to_message_id=reply_to_message_id if first_message else None,
-                    thread_id=thread_id,
-                    session=session,
+                    segment.content,
+                    reply_to_message_id if first_message else None,
+                    thread_id,
+                    session,
+                    highlight_max,
+                    table_mode,
                 )
-                if photo_resp is not None and photo_resp.status_code == 200:
-                    all_responses.append(photo_resp)
-                    photo_sent = True
-                elif photo_resp is not None:
-                    logger.warning(
-                        "sendPhoto failed (%s), falling back to code block", photo_resp.status_code
-                    )
-            except (RuntimeError, OSError) as exc:
-                logger.warning("Table-to-PNG failed, falling back to code block: %s", exc)
-            if not photo_sent:
-                code_block = f"```\n{content}\n```"
-                parts = split_text(code_block, limit=TELEGRAM_TEXT_LIMIT - max_prefix_len)
-                reply_id = reply_to_message_id if first_message else None
-                all_responses.extend(
-                    send_text_parts(
-                        token,
-                        chat_id,
-                        parts,
-                        add_part_prefix=len(parts) > 1,
-                        reply_to_message_id=reply_id,
-                        thread_id=thread_id,
-                        session=session,
-                    )
-                )
+            )
             first_message = False
         elif segment.kind == "image":
             if segment.image is None:

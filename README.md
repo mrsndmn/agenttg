@@ -78,14 +78,41 @@ png_path = md_table_to_png("| A | B |\n|---|---|\n| 1 | 2 |")
 
 All sending functions that use a `parse_mode` (`send_text_parts`, `send_reply_html`, `send_reply_markdown`) automatically detect Telegram's "can't parse entities" error (HTTP 400) and retry the message without formatting, delivering it as plain text. This ensures messages are always delivered even if the markup is malformed.
 
-Additionally, `send_reply_markdown` falls back to sending tables as formatted code blocks when the table-to-PNG rendering fails (e.g. `pandoc`/`wkhtmltopdf` not installed).
+## Table rendering modes
+
+Each table in a `send_reply_markdown` body is sent as its own message, rendered one of three ways:
+
+| Mode | How the table is delivered | Requirements |
+|------|---------------------------|--------------|
+| `image` (default) | PNG via pandoc + wkhtmltoimage, sent with `sendPhoto` | pandoc, wkhtmltoimage |
+| `rich` | Native Telegram rich message (`sendRichMessage`, Bot API 10.2) — the client renders a real table | none |
+| `code` | The raw markdown in a fixed-width code block | none |
+
+Select the preferred mode with the `AGENTTG_TABLE_MODE` environment variable, or per call with `send_reply_markdown(..., table_mode="rich")`. The mode is a *preference*: it expands to an ordered chain and the first renderer that succeeds wins, so a table is never lost.
+
+```
+image -> image, rich, code
+rich  -> rich, image, code
+code  -> code
+```
+
+A table falls through to the next renderer when the PNG toolchain is missing, `sendPhoto` fails, the rich API rejects the message, or the table exceeds the documented rich-message limits (32768 chars, 500 blocks, 20 columns — checked before the request). `highlight_max` (best-value cell highlighting) applies to `image` mode only.
+
+```python
+# Rich table, falling back to an image and then a code block
+agenttg.send_reply_markdown(TOKEN, CHAT_ID, body, table_mode="rich")
+
+# Send a markdown document as a rich message directly
+agenttg.send_rich_markdown(TOKEN, CHAT_ID, "| A | B |\n|---|---|\n| 1 | 2 |")
+```
 
 ## API reference
 
 ### Sending
 - `send_reply(token, chat_id, text)` - plain text
-- `send_reply_markdown(token, chat_id, body)` - markdown with table/image segmentation
+- `send_reply_markdown(token, chat_id, body, table_mode=None)` - markdown with table/image segmentation
 - `send_reply_html(token, chat_id, html)` - HTML formatted
+- `send_rich_markdown(token, chat_id, markdown)` - rich message (`sendRichMessage`)
 - `send_photo(token, chat_id, path)` - photo upload
 - `send_text_parts(token, chat_id, parts, add_part_prefix)` - multi-part MarkdownV2
 
@@ -96,6 +123,8 @@ Additionally, `send_reply_markdown` falls back to sending tables as formatted co
 ### Utilities
 - `set_message_reaction(token, chat_id, message_id, emoji)` - set emoji reaction
 - `fetch_bot_username(token)` - get bot username via getMe
+- `resolve_table_mode(mode=None)` / `table_render_chain(mode=None)` - table rendering mode + fallback chain
+- `rich_table_within_limits(md_table)` / `table_dimensions(md_table)` - rich-message limit preflight
 
 ### Types
 - `ImageReference(path, caption)` - local image reference

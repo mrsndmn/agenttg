@@ -85,6 +85,173 @@ def test_code_mode_chain_is_terminal():
     assert agenttg.table_render_chain("code") == ("code",)
 
 
+def test_unknown_explicit_mode_keeps_the_configured_default(monkeypatch):
+    """A typo in an override must not silently downgrade a configured mode."""
+    monkeypatch.setenv(table_modes.TABLE_MODE_ENV, "rich")
+    assert agenttg.resolve_table_mode("hologram") == "rich"
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        ("table", "rich"),
+        ("TABLE", "rich"),
+        ("rich", "rich"),
+        ("image", "image"),
+        ("png", "image"),
+        ("photo", "image"),
+        ("code", "code"),
+        ("raw", "code"),
+    ],
+)
+def test_alias_vocabulary(spelling, expected):
+    assert agenttg.normalize_table_mode(spelling) == expected
+    assert agenttg.resolve_table_mode(spelling) == expected
+
+
+def test_normalize_rejects_unknown_and_empty():
+    assert agenttg.normalize_table_mode("hologram") is None
+    assert agenttg.normalize_table_mode("") is None
+    assert agenttg.normalize_table_mode(None) is None
+
+
+# ---------------------------------------------------------------------------
+# per-table "<!-- fmt=... -->" directive
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "<!-- fmt=table -->",
+        "<!--fmt=table-->",
+        "<!--  FMT : table  -->",
+        "<!-- format=table -->",
+        "   <!-- fmt=table -->   ",
+    ],
+)
+def test_directive_spellings_parse(line):
+    assert agenttg.parse_table_format_directive(line) == "table"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "<!-- unrelated comment -->",
+        "<!-- note: fmt of the table below -->",
+        "text before <!-- fmt=table -->",
+        "<!-- fmt=table --> | A | B |",
+        "| fmt=table |",
+        "",
+    ],
+)
+def test_non_directive_lines_are_not_parsed(line):
+    assert agenttg.parse_table_format_directive(line) is None
+
+
+def test_directive_value_case_is_preserved_for_the_resolver():
+    """Parsing extracts the spelling; canonicalization is resolve_table_mode's job."""
+    assert agenttg.parse_table_format_directive("<!-- FMT=Table -->") == "Table"
+    assert agenttg.resolve_table_mode("Table") == "rich"
+
+
+def test_directive_sets_mode_on_the_next_table():
+    segments = agenttg.split_body_into_segments(f"Intro\n<!-- fmt=table -->\n{TABLE}")
+    table = [s for s in segments if s.kind == "table"][0]
+    assert table.table_mode == "table"
+
+
+def test_directive_survives_a_blank_line():
+    segments = agenttg.split_body_into_segments(f"<!-- fmt=table -->\n\n{TABLE}")
+    assert [s for s in segments if s.kind == "table"][0].table_mode == "table"
+
+
+def test_directive_is_dropped_when_text_intervenes():
+    body = f"<!-- fmt=table -->\nUnrelated paragraph\n{TABLE}"
+    segments = agenttg.split_body_into_segments(body)
+    assert [s for s in segments if s.kind == "table"][0].table_mode is None
+
+
+def test_directive_applies_to_one_table_only():
+    body = f"<!-- fmt=table -->\n{TABLE}\n\nthen\n\n{TABLE}"
+    tables = [s for s in agenttg.split_body_into_segments(body) if s.kind == "table"]
+    assert [t.table_mode for t in tables] == ["table", None]
+
+
+def test_directive_never_reaches_the_message_text():
+    body = f"Intro\n<!-- fmt=table -->\n{TABLE}"
+    text = "\n".join(s.content for s in agenttg.split_body_into_segments(body) if s.kind == "text")
+    assert "fmt=" not in text
+    assert "fmt=" not in agenttg.format_markdown(body)
+
+
+@patch("agenttg.api.md_table_to_png")
+def test_directive_overrides_the_configured_mode(mock_png, mock_session, monkeypatch):
+    """Env says image, the table says otherwise -> rich, and no PNG is rendered."""
+    monkeypatch.setenv(table_modes.TABLE_MODE_ENV, "image")
+    agenttg.send_reply_markdown(
+        "TOKEN", "123", f"Intro\n<!-- fmt=table -->\n{TABLE}", session=mock_session
+    )
+    mock_png.assert_not_called()
+    assert "sendRichMessage" in _posted_methods(mock_session)
+
+
+@patch("agenttg.api.md_table_to_png")
+def test_directive_overrides_an_explicit_caller_mode(mock_png, mock_session):
+    agenttg.send_reply_markdown(
+        "TOKEN",
+        "123",
+        f"<!-- fmt=raw -->\n{TABLE}",
+        session=mock_session,
+        table_mode="rich",
+    )
+    mock_png.assert_not_called()
+    assert _posted_methods(mock_session) == ["sendMessage"]
+    assert mock_session.post.call_args.kwargs["json"]["text"].startswith("```")
+
+
+@patch("agenttg.api.send_photo")
+@patch("agenttg.api.md_table_to_png")
+def test_unknown_directive_falls_back_to_the_configured_mode(
+    mock_png, mock_photo, mock_session, tmp_path
+):
+    mock_png.return_value = tmp_path / "t.png"
+    mock_photo.return_value = _ok_response()
+    agenttg.send_reply_markdown(
+        "TOKEN",
+        "123",
+        f"<!-- fmt=hologram -->\n{TABLE}",
+        session=mock_session,
+        table_mode="image",
+    )
+    mock_photo.assert_called_once()
+
+
+def test_table_without_a_directive_has_no_mode():
+    tables = [s for s in agenttg.split_body_into_segments(BODY_WITH_TABLE) if s.kind == "table"]
+    assert tables[0].table_mode is None
+
+
+def test_alias_from_the_env_var(monkeypatch):
+    monkeypatch.setenv(table_modes.TABLE_MODE_ENV, "png")
+    assert agenttg.resolve_table_mode() == "image"
+
+
+@patch("agenttg.api.send_photo")
+@patch("agenttg.api.md_table_to_png")
+def test_directive_can_ask_for_an_image_against_a_rich_default(
+    mock_png, mock_photo, mock_session, tmp_path, monkeypatch
+):
+    monkeypatch.setenv(table_modes.TABLE_MODE_ENV, "rich")
+    mock_png.return_value = tmp_path / "t.png"
+    mock_photo.return_value = _ok_response()
+    agenttg.send_reply_markdown(
+        "TOKEN", "123", f"<!-- fmt=image -->\n{TABLE}", session=mock_session
+    )
+    mock_photo.assert_called_once()
+    assert "sendRichMessage" not in _posted_methods(mock_session)
+
+
 # ---------------------------------------------------------------------------
 # rich message limits
 # ---------------------------------------------------------------------------

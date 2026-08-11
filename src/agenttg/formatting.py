@@ -16,6 +16,7 @@ from .constants import (
     _MD_LINK_RE,
     _MEDIA_EXTENSIONS,
     _PLACEHOLDER_BASE,
+    _TABLE_FORMAT_DIRECTIVE_RE,
     _VIDEO_EXTENSIONS,
     TELEGRAM_TEXT_LIMIT,
 )
@@ -133,6 +134,11 @@ def format_markdown(text: str) -> str:
     in_code_block = False
     while i < len(lines):
         line = lines[i]
+
+        # A table-format directive is metadata, never message text.
+        if not in_code_block and parse_table_format_directive(line) is not None:
+            i += 1
+            continue
 
         # Handle code blocks (triple backticks) — pass through unescaped
         if line.strip().startswith("```"):
@@ -362,11 +368,29 @@ def parse_media_reference_line(
     return ("none", None)
 
 
+def parse_table_format_directive(line: str) -> str | None:
+    """Return the mode named by a ``<!-- fmt=... -->`` line, or ``None``.
+
+    The directive is how a message author overrides the rendering of the single
+    table that follows it, e.g. ``<!-- fmt=table -->`` for a native Telegram
+    table. It must be alone on its line; the value is returned verbatim (mode
+    validation belongs to :func:`agenttg.table_modes.resolve_table_mode`).
+    """
+    match = _TABLE_FORMAT_DIRECTIVE_RE.match(line.strip())
+    return match.group("mode").strip() if match else None
+
+
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
-    """Split body into alternating text, table, image, video, and document segments."""
+    """Split body into alternating text, table, image, video, and document segments.
+
+    A ``<!-- fmt=... -->`` directive line is consumed (never rendered) and sets
+    ``table_mode`` on the next table segment, provided only blank lines separate
+    them; anything else in between drops it.
+    """
     lines = body.split("\n")
     segments: list[BodySegment] = []
     text_lines: list[str] = []
+    pending_mode: str | None = None
 
     def flush_text() -> None:
         if text_lines:
@@ -375,14 +399,28 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
 
     i = 0
     while i < len(lines):
+        directive = parse_table_format_directive(lines[i])
+        if directive is not None:
+            pending_mode = directive
+            i += 1
+            continue
         if lines[i].strip().startswith("|"):
             flush_text()
             table_lines: list[str] = []
             while i < len(lines) and lines[i].strip().startswith("|"):
                 table_lines.append(lines[i])
                 i += 1
-            segments.append(BodySegment(kind="table", content="\n".join(table_lines)))
+            segments.append(
+                BodySegment(
+                    kind="table",
+                    content="\n".join(table_lines),
+                    table_mode=pending_mode,
+                )
+            )
+            pending_mode = None
         else:
+            if lines[i].strip():
+                pending_mode = None
             kind, media_ref = parse_media_reference_line(lines[i], workdir=workdir)
             if media_ref is not None:
                 flush_text()

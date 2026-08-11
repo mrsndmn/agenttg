@@ -88,7 +88,7 @@ Each table in a `send_reply_markdown` body is sent as its own message, rendered 
 | `rich` | Native Telegram rich message (`sendRichMessage`, Bot API 10.2) — the client renders a real table | none |
 | `code` | The raw markdown in a fixed-width code block | none |
 
-Select the preferred mode with the `AGENTTG_TABLE_MODE` environment variable, or per call with `send_reply_markdown(..., table_mode="rich")`. The mode is a *preference*: it expands to an ordered chain and the first renderer that succeeds wins, so a table is never lost.
+Select the preferred mode with the `AGENTTG_TABLE_MODE` environment variable, or per call with `send_reply_markdown(..., table_mode="rich")`. `table` is accepted as a synonym for `rich` (and `png`/`photo` for `image`, `raw` for `code`), so a chat-facing option can read `fmt=table`. The mode is a *preference*: it expands to an ordered chain and the first renderer that succeeds wins, so a table is never lost.
 
 ```
 image -> image, rich, code
@@ -105,6 +105,32 @@ agenttg.send_reply_markdown(TOKEN, CHAT_ID, body, table_mode="rich")
 # Send a markdown document as a rich message directly
 agenttg.send_rich_markdown(TOKEN, CHAT_ID, "| A | B |\n|---|---|\n| 1 | 2 |")
 ```
+
+### Per-table override
+
+A single table can override the configured mode with an `<!-- fmt=... -->` directive on
+the line above it — useful when the message author (a human or an agent writing the body)
+knows this one table reads better another way:
+
+```markdown
+Both renderings in one message:
+
+<!-- fmt=table -->
+| Model | Accuracy |
+|-------|----------|
+| A     | 95.2     |
+
+<!-- fmt=image -->
+| Step | Loss | Grad norm | LR |
+|------|------|-----------|----|
+| 1000 | 2.31 | 0.84      | 3e-4 |
+```
+
+Precedence is **directive > `table_mode=` argument > `AGENTTG_TABLE_MODE` > `image`**. The
+directive is an HTML comment, so it stays invisible in any markdown viewer, and the parser
+consumes it — it never reaches the chat. It applies to the next table only (blank lines in
+between are fine; any other text drops it), and an unrecognized mode is ignored, leaving the
+configured one in force.
 
 ## API reference
 
@@ -124,11 +150,13 @@ agenttg.send_rich_markdown(TOKEN, CHAT_ID, "| A | B |\n|---|---|\n| 1 | 2 |")
 - `set_message_reaction(token, chat_id, message_id, emoji)` - set emoji reaction
 - `fetch_bot_username(token)` - get bot username via getMe
 - `resolve_table_mode(mode=None)` / `table_render_chain(mode=None)` - table rendering mode + fallback chain
+- `normalize_table_mode(mode)` - canonical mode name for a spelling (`table` -> `rich`), or `None`
+- `parse_table_format_directive(line)` - mode named by a `<!-- fmt=... -->` line, or `None`
 - `rich_table_within_limits(md_table)` / `table_dimensions(md_table)` - rich-message limit preflight
 
 ### Types
 - `ImageReference(path, caption)` - local image reference
-- `BodySegment(kind, content, image)` - message segment (text/table/image)
+- `BodySegment(kind, content, image, table_mode)` - message segment (text/table/image)
 - `TELEGRAM_TEXT_LIMIT` - 4096
 
 ## Development

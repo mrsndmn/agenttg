@@ -463,9 +463,10 @@ def send_reply_markdown(
     """Send a markdown reply with text/table segmentation and media support.
 
     Each table is sent as its own message, rendered according to *table_mode*
-    (``image``, ``rich``, or ``code``; default from ``AGENTTG_TABLE_MODE``, see
-    :mod:`agenttg.table_modes`), falling through to the next renderer in the
-    chain on failure.
+    (``image``, ``rich``/``table``, or ``code``; default from
+    ``AGENTTG_TABLE_MODE``, see :mod:`agenttg.table_modes`), falling through to
+    the next renderer in the chain on failure. A single table overrides that with
+    a ``<!-- fmt=... -->`` directive on the line above it.
     *workdir* overrides ``Path.cwd()`` when resolving relative media paths.
     """
     body = (body or "").strip() or "(no response)"
@@ -504,7 +505,9 @@ def send_reply_markdown(
                     thread_id,
                     session,
                     highlight_max,
-                    table_mode,
+                    # A "<!-- fmt=... -->" directive on this table wins over the
+                    # caller's mode, which in turn wins over the environment.
+                    segment.table_mode or table_mode,
                 )
             )
             first_message = False

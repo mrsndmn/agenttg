@@ -22,6 +22,7 @@ from .formatting import (
     parse_document_reference_line,
     parse_image_reference_line,
     parse_media_reference_line,
+    parse_table_format_directive,
     parse_video_reference_line,
     split_body_into_segments,
     split_text,
@@ -36,8 +37,10 @@ from .rich_message import (
 )
 from .table_modes import (
     DEFAULT_TABLE_MODE,
+    TABLE_MODE_ALIASES,
     TABLE_MODE_ENV,
     TABLE_MODES,
+    normalize_table_mode,
     resolve_table_mode,
     table_render_chain,
 )
@@ -52,6 +55,7 @@ __all__ = [
     "RICH_TABLE_COLUMN_LIMIT",
     "RICH_TEXT_LIMIT",
     "TABLE_MODES",
+    "TABLE_MODE_ALIASES",
     "TABLE_MODE_ENV",
     "TELEGRAM_TEXT_LIMIT",
     "escape_html",
@@ -62,9 +66,11 @@ __all__ = [
     "get_updates",
     "make_session",
     "md_table_to_png",
+    "normalize_table_mode",
     "parse_document_reference_line",
     "parse_image_reference_line",
     "parse_media_reference_line",
+    "parse_table_format_directive",
     "parse_video_reference_line",
     "resolve_table_mode",
     "rich_table_within_limits",

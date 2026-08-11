@@ -30,3 +30,11 @@ _BARE_VIDEO_RE = re.compile(
 _BARE_FILE_RE = re.compile(
     r"^\s*(?:[-*]\s+)?`?(?P<path>(?:/|\.{1,2}/)?[^\s`]+?\.\w+)`?\s*$",
 )
+
+# Per-table rendering override, e.g. "<!-- fmt=table -->" on its own line above a
+# table. An HTML comment so it stays invisible in any markdown viewer; the parser
+# consumes it, so it never reaches the chat either way.
+_TABLE_FORMAT_DIRECTIVE_RE = re.compile(
+    r"^<!--\s*(?:fmt|format)\s*[=:]\s*(?P<mode>[\w-]+)\s*-->$",
+    re.IGNORECASE,
+)

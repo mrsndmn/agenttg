@@ -26,6 +26,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+agenttg = ["assets/twemoji/svg/*.svg", "assets/twemoji/LICENSE-GRAPHICS"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

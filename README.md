@@ -98,6 +98,8 @@ code  -> code
 
 A table falls through to the next renderer when the PNG toolchain is missing, `sendPhoto` fails, the rich API rejects the message, or the table exceeds the documented rich-message limits (32768 chars, 500 blocks, 20 columns — checked before the request). `highlight_max` (best-value cell highlighting) applies to `image` mode only.
 
+`image` rendering is **fully offline**. Emoji are substituted into the HTML as inline SVG from the twemoji set vendored under `agenttg/assets/twemoji/svg` (refresh with `python scripts/sync_twemoji_assets.py`; point `AGENTTG_TWEMOJI_ASSETS_DIR` elsewhere to override). Emoji with no vendored asset are left as literal text. Both subprocesses are time-bounded, and `wkhtmltoimage`'s exit code is not trusted on its own — it reports a failure whenever *any* asset failed to load, so the render is judged by whether it produced a decodable PNG.
+
 ```python
 # Rich table, falling back to an image and then a code block
 agenttg.send_reply_markdown(TOKEN, CHAT_ID, body, table_mode="rich")

@@ -6,6 +6,7 @@ Python requirements: Pillow.
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -13,8 +14,18 @@ from pathlib import Path
 
 from PIL import Image
 
+from .emoji import emojify_html
+
+logger = logging.getLogger("agenttg")
+
 _WKHTMLTOIMAGE_LOCAL = Path.home() / ".local/wkhtmltox/usr/local/bin/wkhtmltoimage"
 _PANDOC_LOCAL = Path.home() / ".local/pandoc/usr/bin/pandoc"
+
+# Neither binary should ever outlive a chat round trip.  Without a cap a stalled
+# subprocess wedges the caller indefinitely; raising instead lets the render
+# chain fall through to the next mode.
+_PANDOC_TIMEOUT_S = 30
+_WKHTMLTOIMAGE_TIMEOUT_S = 120
 
 
 def _resolve_binary(name: str, local_path: Path, custom_path: str | None = None) -> str:
@@ -76,10 +87,6 @@ _STYLE_BLOCK = """
 </style>
 """
 
-_TWEMOJI_SCRIPT = """
-<script src="https://twemoji.maxcdn.com/v/latest/twemoji.min.js" crossorigin="anonymous"></script>
-"""
-
 
 def _make_script_block(highlight_max: bool) -> str:
     """Generate the JavaScript block with conditional highlighting logic."""
@@ -116,9 +123,6 @@ def _make_script_block(highlight_max: bool) -> str:
     return f"""
 <script>
 (function() {{
-  if (typeof twemoji !== 'undefined') {{
-    twemoji.parse(document.body, {{ folder: '72x72', ext: '.png', className: 'emoji' }});
-  }}
   var table = document.querySelector('table');
   if (!table || !table.tBodies.length) return;
   var rows = table.tBodies[0].rows;
@@ -134,6 +138,24 @@ def _make_script_block(highlight_max: bool) -> str:
 }})();
 </script>
 """
+
+
+def _run(argv: list[str], timeout: int, what: str) -> subprocess.CompletedProcess[str]:
+    """Run *argv*, turning a stall into a RuntimeError instead of hanging forever."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{what} timed out after {timeout}s") from exc
+
+
+def _is_usable_png(path: Path) -> bool:
+    """True when *path* holds an image PIL can decode."""
+    try:
+        with Image.open(path) as img:
+            img.load()
+    except Exception:
+        return False
+    return True
 
 
 def _is_white(pixel: tuple[int, int, int], white_threshold: int) -> bool:
@@ -201,6 +223,9 @@ def md_table_to_png(
     own_md = False
     if output_path is None:
         output_path = Path(tempfile.mktemp(suffix=".png"))
+    # Cleared up front so "did wkhtmltoimage produce an image?" below can never
+    # be answered by a leftover file from an earlier render.
+    output_path.unlink(missing_ok=True)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
         f.write(md_content)
         md_path = Path(f.name)
@@ -211,7 +236,7 @@ def md_table_to_png(
             html_path = Path(f.name)
 
         try:
-            result = subprocess.run(
+            result = _run(
                 [
                     _resolve_pandoc(),
                     str(md_path),
@@ -223,38 +248,52 @@ def md_table_to_png(
                     "-o",
                     str(html_path),
                 ],
-                capture_output=True,
-                text=True,
+                _PANDOC_TIMEOUT_S,
+                "pandoc",
             )
             if result.returncode != 0:
                 raise RuntimeError(f"pandoc error: {result.stderr}")
 
-            html_content = html_path.read_text(encoding="utf-8")
+            html_content = emojify_html(html_path.read_text(encoding="utf-8"))
             if "</head>" in html_content:
                 html_content = html_content.replace("</head>", _STYLE_BLOCK + "</head>")
             if "</body>" in html_content:
-                script_block = _make_script_block(highlight_max)
                 html_content = html_content.replace(
-                    "</body>", _TWEMOJI_SCRIPT + script_block + "</body>"
+                    "</body>", _make_script_block(highlight_max) + "</body>"
                 )
             html_path.write_text(html_content, encoding="utf-8")
 
-            result = subprocess.run(
+            result = _run(
                 [
                     _resolve_wkhtmltoimage(wkhtmltoimage_path),
                     "--width",
                     str(width),
                     "--enable-smart-width",
                     "--enable-local-file-access",
+                    "--load-error-handling",
+                    "ignore",
+                    "--load-media-error-handling",
+                    "ignore",
                     "--quiet",
                     str(html_path),
                     str(output_path),
                 ],
-                capture_output=True,
-                text=True,
+                _WKHTMLTOIMAGE_TIMEOUT_S,
+                "wkhtmltoimage",
             )
+            # wkhtmltoimage exits non-zero when *any* asset failed to load -- a
+            # remote image in a table cell, say -- even though it went on to
+            # render and write a complete PNG, and even with the load-error
+            # handlers above set to "ignore".  Judge it by its output, not its
+            # exit code, and only fail when there is no usable image.
             if result.returncode != 0:
-                raise RuntimeError(f"wkhtmltoimage error: {result.stderr}")
+                if not _is_usable_png(output_path):
+                    raise RuntimeError(f"wkhtmltoimage error: {result.stderr.strip()}")
+                logger.debug(
+                    "wkhtmltoimage exited %s but produced a valid PNG: %s",
+                    result.returncode,
+                    result.stderr.strip(),
+                )
 
             _crop_right_white_padding(output_path)
             return output_path

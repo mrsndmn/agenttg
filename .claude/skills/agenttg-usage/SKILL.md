@@ -50,7 +50,7 @@ parts = agenttg.split_text(formatted, limit=4096)
 # Escape for HTML parse_mode
 html_safe = agenttg.escape_html("<script>alert('xss')</script>")
 
-# Use a standalone [[attach: path/to/file]] line for a photo (PNG/JPEG/WebP) or a document (other files).
+# Use a standalone [Report](path/to/file "attach") line for a photo (PNG/JPEG/WebP) or a document (other files).
 # Segment body into text/table/image/document parts
 segments = agenttg.split_body_into_segments(body)
 for seg in segments:

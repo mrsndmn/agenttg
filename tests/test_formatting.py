@@ -286,7 +286,7 @@ def test_split_body_into_segments_mixed_content():
 
 
 def test_attachment_after_code_span_and_inside_multiline_span():
-    body = "```sample```\n[[attach: real]]\nShow `this\n[[attach: example]]\nexample`"
+    body = '```sample```\n[Report](real "attach")\nShow `this\n[Report](example "attach")\nexample`'
     segments = split_body_into_segments(body)
     assert [s.kind for s in segments] == ["text", "document", "text"]
     assert segments[1].image.path.name == "real"
@@ -294,8 +294,29 @@ def test_attachment_after_code_span_and_inside_multiline_span():
 
 def test_attachment_code_context_respects_markdown_blocks():
     body = (
-        "# Typing a ` character\nShow `this example:\n[[attach: example.txt]]\nliterally`\n"
-        "\n- ```sh\n  echo hello\n  ```\n\n[[attach: real.txt]]"
+        '# Typing a ` character\nShow `this example:\n[Report](example.txt "attach")\nliterally`\n'
+        '\n- ```sh\n  echo hello\n  ```\n\n[Report](real.txt "attach")'
     )
     documents = [s.image.path.name for s in split_body_into_segments(body) if s.kind == "document"]
     assert documents == ["real.txt"]
+
+
+def test_attachment_requires_standalone_local_inline_link_with_reserved_title(tmp_path):
+    text = """[Report](report.pdf)
+[Report](report.pdf "preview")
+![Plot](plot.png "attach")
+Read [Report](report.pdf "attach")
+[Report](report.pdf "attach") and more
+[Report](https://example.org/report.pdf "attach")
+[Remote](//example.org/report.pdf "attach")
+[Section](report.pdf#part "attach")
+[Reference][r]
+
+[r]: report.pdf "attach"
+
+[[attach: report.pdf]]"""
+    assert all(segment.kind == "text" for segment in split_body_into_segments(text, tmp_path))
+    body = '[**Отчёт** `v2`](<отчёты/итог (2).pdf> "attach")'
+    (segment,) = split_body_into_segments(body, tmp_path)
+    assert segment.image.path == tmp_path / "отчёты/итог (2).pdf"
+    assert segment.image.caption == "Отчёт v2"

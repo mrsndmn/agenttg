@@ -372,11 +372,11 @@ def test_reply_uploads_only_explicit_files(tmp_path, mock_session, monkeypatch):
             f"![image]({path})",
             "````example",
             "```",
-            "[[attach: a b.png]]",
+            '[Report](<a b.png> "attach")',
             "````",
-            "    [[attach: a b.png]]",
-            "[[attach: a b.png]]",
-            "[[attach: large]]",
+            '    [Report](<a b.png> "attach")',
+            '[Report](<a b.png> "attach")',
+            '[Report](large "attach")',
             "Answer continues.",
         ]
     )
@@ -388,6 +388,7 @@ def test_reply_uploads_only_explicit_files(tmp_path, mock_session, monkeypatch):
         "sendMessage",
         "sendMessage",
     ]
+    assert calls[1].kwargs["data"]["caption"] == "Report"
     assert calls[1].kwargs["files"]["photo"] == (path.name, b"1234")
     assert "large" in calls[2].kwargs["json"]["text"]
     assert "limit" in calls[2].kwargs["json"]["text"]
@@ -415,7 +416,9 @@ def test_explicit_attachment_uses_media_specific_limit(
     for size in [limit, limit + 1]:
         mock_session.reset_mock()
         path.write_bytes(b"x" * size)
-        agenttg.send_reply_markdown("TOKEN", "123", f"[[attach: {path}]]", session=mock_session)
+        agenttg.send_reply_markdown(
+            "TOKEN", "123", f'[Report](<{path}> "attach")', session=mock_session
+        )
         call = mock_session.post.call_args
         if size == limit:
             assert call.args[0].endswith("/send" + kind.title())

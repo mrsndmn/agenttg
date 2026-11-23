@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
 
 from markdown_it import MarkdownIt
-from markdown_it.rules_inline import StateInline
+from markdown_it.rules_inline import StateInline, link
 
 from .constants import (
     _BARE_FILE_RE,
@@ -383,32 +384,24 @@ def parse_table_format_directive(line: str) -> str | None:
     return match.group("mode").strip() if match else None
 
 
-_ATTACHMENT = re.compile(r"\[\[attach:[ \t]*(.+?)\]\][ \t]*\r?$", re.MULTILINE)
-
-
-def _attachment_rule(state: StateInline, silent: bool) -> bool:
-    """Recognize a whole directive line when the inline parser reaches it as prose."""
-    pos = state.pos
-    if pos and state.src[pos - 1] != "\n":
+def _link_with_source(state: StateInline, silent: bool) -> bool:
+    """Keep source offsets for links that start on their own line."""
+    start = state.pos
+    if not link(state, silent):
         return False
-    match = _ATTACHMENT.match(state.src, pos, state.posMax)
-    if not match or not match[1].strip():
-        return False
-    if not silent:
-        token = state.push("attachment", "", 0)
-        token.meta["offset"] = pos
-    state.pos = match.end()
+    if not silent and (start == 0 or state.src[start - 1] == "\n"):
+        state.tokens[-1].meta["source_span"] = (start, state.pos)
     return True
 
 
-_MARKDOWN = MarkdownIt("commonmark").disable("inline")
-_MARKDOWN.inline.ruler.before("link", "attachment", _attachment_rule)
+_MARKDOWN = MarkdownIt("commonmark", {"store_labels": True}).disable("inline")
+_MARKDOWN.inline.ruler.at("link", _link_with_source)
 
 
-def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, Path]]:
-    """Map CommonMark block and inline tokens back to original reply lines."""
+def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, ImageReference]]:
+    """Find standalone local links titled 'attach' in CommonMark prose."""
     code: set[int] = set()
-    paths: dict[int, Path] = {}
+    attachments: dict[int, ImageReference] = {}
     env: dict = {}
     for block in _MARKDOWN.parse(body, env):
         if block.map is None:
@@ -416,23 +409,43 @@ def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, Path]
         start, end = block.map
         if block.type in {"fence", "code_block"}:
             code.update(range(start, end))
-        elif block.type == "inline" and "[[attach:" in block.content:
+        elif block.type == "inline" and "[" in block.content:
             tokens = []
             _MARKDOWN.inline.parse(block.content, _MARKDOWN, env, tokens)
             offset = 0
             line = start
-            for token in tokens:
-                if token.type != "attachment":
-                    continue
-                pos = token.meta["offset"]
-                line += block.content.count("\n", offset, pos)
-                offset = pos
-                # Block parsing strips container prefixes and indentation. Only
-                # accept directives that also occupy the original, unindented line.
-                match = _ATTACHMENT.fullmatch(lines[line])
-                if match:
-                    paths[line] = Path(match[1].strip())
-    return code, paths
+            openings: list[int] = []
+            for index, token in enumerate(tokens):
+                if token.type == "link_open":
+                    openings.append(index)
+                elif token.type == "link_close":
+                    opening = openings.pop()
+                    if "source_span" not in token.meta:
+                        continue
+                    anchor = tokens[opening]
+                    if anchor.attrGet("title") != "attach" or "label" in anchor.meta:
+                        continue
+                    pos, stop = token.meta["source_span"]
+                    line += block.content.count("\n", offset, pos)
+                    offset = pos
+                    if lines[line].rstrip(" \t") != block.content[pos:stop]:
+                        continue
+                    href = str(anchor.attrGet("href") or "")
+                    path = unquote(href)
+                    if (
+                        not path
+                        or "?" in href
+                        or "#" in href
+                        or re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)", path)
+                    ):
+                        continue
+                    caption = "".join(
+                        part.content
+                        for part in tokens[opening + 1 : index]
+                        if part.type in {"text", "code_inline", "image"}
+                    )
+                    attachments[line] = ImageReference(Path(path), caption)
+    return code, attachments
 
 
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
@@ -486,9 +499,12 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
                 pending_mode = None
             if i in attachments:
                 flush_text()
-                path = (workdir or Path.cwd()) / attachments[i]
+                reference = attachments[i]
+                path = (workdir or Path.cwd()) / reference.path
                 kind = "image" if path.suffix.lower() in _IMAGE_EXTENSIONS else "document"
-                segments.append(BodySegment(kind=kind, image=ImageReference(path)))
+                segments.append(
+                    BodySegment(kind=kind, image=ImageReference(path, reference.caption))
+                )
                 i += 1
                 continue
             text_lines.append(lines[i])

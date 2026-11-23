@@ -54,6 +54,15 @@ agenttg.send_reply_markdown(TOKEN, CHAT_ID, """
 agenttg.send_reply_html(TOKEN, CHAT_ID, "<b>Bold</b> and <i>italic</i>")
 ```
 
+## Reply attachments
+
+Put `[Report](path/to/report.pdf "attach")` on its own line to attach a local file. The link text becomes the caption.
+Wrap paths with spaces in angle brackets, as in `[Plot](<plots/run 1.png> "attach")`.
+PNG, JPEG, and WebP files are sent as photos. Other files are sent as documents. Paths can contain spaces and are relative to the supplied
+`workdir` or the current directory. Bare paths, Markdown links, and directives
+inside code blocks remain text. The sender skips photos over 10,000,000 bytes and documents over 50,000,000 bytes,
+reports their names, and continues with the reply.
+
 ## Formatting utilities
 
 ```python

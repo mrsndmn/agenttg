@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import unquote
+
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline, link
 
 from .constants import (
     _BARE_FILE_RE,
@@ -380,17 +384,90 @@ def parse_table_format_directive(line: str) -> str | None:
     return match.group("mode").strip() if match else None
 
 
+def _link_with_source(state: StateInline, silent: bool) -> bool:
+    """Keep source offsets for links that start on their own line."""
+    start = state.pos
+    if not link(state, silent):
+        return False
+    if not silent and (start == 0 or state.src[start - 1] == "\n"):
+        state.tokens[-1].meta["source_span"] = (start, state.pos)
+    return True
+
+
+_MARKDOWN = MarkdownIt("commonmark", {"store_labels": True}).disable("inline")
+_MARKDOWN.inline.ruler.at("link", _link_with_source)
+
+
+def _caption_text(tokens) -> str:
+    """Read the visible inline label, including alt text inside nested images."""
+    parts = []
+    for token in tokens:
+        if token.type in {"text", "text_special", "code_inline"}:
+            parts.append(token.content)
+        elif token.type == "image":
+            parts.append(_caption_text(token.children or []))
+    return "".join(parts)
+
+
+def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, ImageReference]]:
+    """Find standalone local links titled 'attach' in CommonMark prose."""
+    code: set[int] = set()
+    attachments: dict[int, ImageReference] = {}
+    env: dict = {}
+    for block in _MARKDOWN.parse(body, env):
+        if block.map is None:
+            continue
+        start, end = block.map
+        if block.type in {"fence", "code_block"}:
+            code.update(range(start, end))
+        elif block.type == "inline" and "[" in block.content:
+            tokens = []
+            _MARKDOWN.inline.parse(block.content, _MARKDOWN, env, tokens)
+            offset = 0
+            line = start
+            openings: list[int] = []
+            for index, token in enumerate(tokens):
+                if token.type == "link_open":
+                    openings.append(index)
+                elif token.type == "link_close":
+                    opening = openings.pop()
+                    if "source_span" not in token.meta:
+                        continue
+                    anchor = tokens[opening]
+                    if anchor.attrGet("title") != "attach" or "label" in anchor.meta:
+                        continue
+                    pos, stop = token.meta["source_span"]
+                    line += block.content.count("\n", offset, pos)
+                    offset = pos
+                    if lines[line].rstrip(" \t") != block.content[pos:stop]:
+                        continue
+                    href = str(anchor.attrGet("href") or "")
+                    path = unquote(href)
+                    if (
+                        not path
+                        or "?" in href
+                        or "#" in href
+                        or re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)", path)
+                    ):
+                        continue
+                    caption = _caption_text(tokens[opening + 1 : index])
+                    attachments[line] = ImageReference(Path(path), caption)
+    return code, attachments
+
+
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
-    """Split body into alternating text, table, image, video, and document segments.
+    """Split body into alternating text, table, and explicit attachment segments.
 
     A ``<!-- fmt=... -->`` directive line is consumed (never rendered) and sets
     ``table_mode`` on the next table segment, provided only blank lines separate
     them; anything else in between drops it.
     """
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
     lines = body.split("\n")
     segments: list[BodySegment] = []
     text_lines: list[str] = []
     pending_mode: str | None = None
+    code_lines, attachments = _reply_lines(body, lines)
 
     def flush_text() -> None:
         if text_lines:
@@ -399,6 +476,12 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
 
     i = 0
     while i < len(lines):
+        line = lines[i]
+        if i in code_lines:
+            pending_mode = None
+            text_lines.append(line)
+            i += 1
+            continue
         directive = parse_table_format_directive(lines[i])
         if directive is not None:
             pending_mode = directive
@@ -407,7 +490,7 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
         if lines[i].strip().startswith("|"):
             flush_text()
             table_lines: list[str] = []
-            while i < len(lines) and lines[i].strip().startswith("|"):
+            while i < len(lines) and i not in code_lines and lines[i].strip().startswith("|"):
                 table_lines.append(lines[i])
                 i += 1
             segments.append(
@@ -421,10 +504,14 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
         else:
             if lines[i].strip():
                 pending_mode = None
-            kind, media_ref = parse_media_reference_line(lines[i], workdir=workdir)
-            if media_ref is not None:
+            if i in attachments:
                 flush_text()
-                segments.append(BodySegment(kind=kind, image=media_ref))
+                reference = attachments[i]
+                path = (workdir or Path.cwd()) / reference.path
+                kind = "image" if path.suffix.lower() in _IMAGE_EXTENSIONS else "document"
+                segments.append(
+                    BodySegment(kind=kind, image=ImageReference(path, reference.caption))
+                )
                 i += 1
                 continue
             text_lines.append(lines[i])

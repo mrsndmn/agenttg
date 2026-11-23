@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 from contextlib import suppress
 from pathlib import Path
 
@@ -119,6 +121,26 @@ def send_video(
                 video_path.unlink()
 
 
+MAX_REPLY_FILE_BYTES = 50_000_000
+
+
+class _AttachmentError(Exception):
+    """A local attachment cannot be delivered."""
+
+
+def _read_attachment(path: Path, limit: int) -> bytes:
+    # A replaced path can point to a FIFO. Inspect the open descriptor without blocking.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _AttachmentError("not a regular file")
+        if info.st_size <= limit:
+            data = stream.read(limit + 1)
+            if len(data) <= limit:
+                return data
+        raise _AttachmentError(f"exceeds the {limit:,}-byte limit")
+
+
 def send_document(
     token: str,
     chat_id: str,
@@ -128,6 +150,8 @@ def send_document(
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
     session: requests.Session | None = None,
+    *,
+    max_bytes: int | None = None,
 ) -> requests.Response | None:
     """Send a file as a document to the chat. Returns response or None on failure."""
     s = session or make_session()
@@ -140,15 +164,29 @@ def send_document(
     if thread_id is not None:
         data["message_thread_id"] = thread_id
     try:
-        with open(file_path, "rb") as f:
+        if max_bytes is not None:
+            try:
+                contents = _read_attachment(file_path, max_bytes)
+            except (OSError, ValueError) as exc:
+                raise _AttachmentError(str(exc)) from exc
             resp = _request_with_retry(
                 s,
                 "post",
                 url,
                 data=data,
-                files={"document": f},
+                files={"document": (file_path.name, contents)},
                 timeout=120,
             )
+        else:
+            with open(file_path, "rb") as f:
+                resp = _request_with_retry(
+                    s,
+                    "post",
+                    url,
+                    data=data,
+                    files={"document": f},
+                    timeout=120,
+                )
         if resp.status_code != 200:
             logger.warning(
                 "Telegram sendDocument returned %s: %s",
@@ -469,7 +507,7 @@ def send_reply_markdown(
     a ``<!-- fmt=... -->`` directive on the line above it.
     *workdir* overrides ``Path.cwd()`` when resolving relative media paths.
     """
-    body = (body or "").strip() or "(no response)"
+    body = body if body and body.strip() else "(no response)"
     segments = split_body_into_segments(body, workdir=workdir)
     all_responses: list[requests.Response] = []
     max_prefix_len = _MAX_PREFIX_LEN
@@ -511,57 +549,38 @@ def send_reply_markdown(
                 )
             )
             first_message = False
-        elif segment.kind == "image":
-            if segment.image is None:
-                continue
-            image_ref = segment.image
-            caption = image_ref.caption or image_ref.path.name
-            photo_resp = send_photo(
-                token=token,
-                chat_id=chat_id,
-                png_path=image_ref.path,
-                caption=caption,
-                delete_after_send=False,
-                reply_to_message_id=reply_to_message_id if first_message else None,
-                thread_id=thread_id,
-                session=session,
-            )
-            if photo_resp is not None:
-                all_responses.append(photo_resp)
-            first_message = False
-        elif segment.kind == "video":
-            if segment.image is None:
-                continue
-            video_ref = segment.image
-            caption = video_ref.caption or video_ref.path.name
-            video_resp = send_video(
-                token=token,
-                chat_id=chat_id,
-                video_path=video_ref.path,
-                caption=caption,
-                delete_after_send=False,
-                reply_to_message_id=reply_to_message_id if first_message else None,
-                thread_id=thread_id,
-                session=session,
-            )
-            if video_resp is not None:
-                all_responses.append(video_resp)
-            first_message = False
         elif segment.kind == "document":
             if segment.image is None:
                 continue
             doc_ref = segment.image
             caption = doc_ref.caption or doc_ref.path.name
-            doc_resp = send_document(
-                token=token,
-                chat_id=chat_id,
-                file_path=doc_ref.path,
-                caption=caption,
-                delete_after_send=False,
-                reply_to_message_id=reply_to_message_id if first_message else None,
-                thread_id=thread_id,
-                session=session,
-            )
+            try:
+                doc_resp = send_document(
+                    token=token,
+                    chat_id=chat_id,
+                    file_path=doc_ref.path,
+                    caption=caption,
+                    delete_after_send=False,
+                    max_bytes=MAX_REPLY_FILE_BYTES,
+                    reply_to_message_id=reply_to_message_id if first_message else None,
+                    thread_id=thread_id,
+                    session=session,
+                )
+            except _AttachmentError as exc:
+                notice = f"Skipped {doc_ref.path.name}: {exc}"
+                all_responses.extend(
+                    send_text_parts(
+                        token,
+                        chat_id,
+                        split_text(escape_markdownv2(notice)),
+                        add_part_prefix=False,
+                        reply_to_message_id=reply_to_message_id if first_message else None,
+                        thread_id=thread_id,
+                        session=session,
+                    )
+                )
+                first_message = False
+                continue
             if doc_resp is not None:
                 all_responses.append(doc_resp)
             first_message = False

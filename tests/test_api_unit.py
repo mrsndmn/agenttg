@@ -357,3 +357,37 @@ def test_request_with_retry_raises_after_max_retries(mock_sleep):
     with pytest.raises(requests.ConnectionError):
         transport._request_with_retry(session, "post", "http://example.com", timeout=5)
     assert session.post.call_count == transport._MAX_RETRIES
+
+
+def test_reply_uploads_only_explicit_files(tmp_path, mock_session, monkeypatch):
+    monkeypatch.setattr(agenttg.api, "MAX_REPLY_FILE_BYTES", 4)
+    path = tmp_path / "a b.png"
+    path.write_bytes(b"1234")
+    (tmp_path / "large").write_bytes(b"12345")
+    body = "\n".join(
+        [
+            path.name,
+            f"[report]({path})",
+            f"![image]({path})",
+            "````example",
+            "```",
+            "[[attach: a b.png]]",
+            "````",
+            "    [[attach: a b.png]]",
+            "[[attach: a b.png]]",
+            "[[attach: large]]",
+            "Answer continues.",
+        ]
+    )
+    agenttg.send_reply_markdown("TOKEN", "123", body, workdir=tmp_path, session=mock_session)
+    calls = mock_session.post.call_args_list
+    assert [c.args[0].rsplit("/", 1)[1] for c in calls] == [
+        "sendMessage",
+        "sendDocument",
+        "sendMessage",
+        "sendMessage",
+    ]
+    assert calls[1].kwargs["files"]["document"] == (path.name, b"1234")
+    assert "large" in calls[2].kwargs["json"]["text"]
+    assert "limit" in calls[2].kwargs["json"]["text"]
+    assert "Answer continues" in calls[3].kwargs["json"]["text"]

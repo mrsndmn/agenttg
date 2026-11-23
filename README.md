@@ -54,6 +54,14 @@ agenttg.send_reply_markdown(TOKEN, CHAT_ID, """
 agenttg.send_reply_html(TOKEN, CHAT_ID, "<b>Bold</b> and <i>italic</i>")
 ```
 
+## Reply attachments
+
+Put `[[attach: path/to/report.pdf]]` on its own line to send a local file as a
+Telegram document. Paths can contain spaces and are relative to the supplied
+`workdir` or the current directory. Bare paths, Markdown links, and directives
+inside code blocks remain text. The sender skips files over 50,000,000 bytes,
+reports their names, and continues with the reply.
+
 ## Formatting utilities
 
 ```python

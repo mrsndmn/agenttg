@@ -381,7 +381,7 @@ def parse_table_format_directive(line: str) -> str | None:
 
 
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
-    """Split body into alternating text, table, image, video, and document segments.
+    """Split body into alternating text, table, and explicit document segments.
 
     A ``<!-- fmt=... -->`` directive line is consumed (never rendered) and sets
     ``table_mode`` on the next table segment, provided only blank lines separate
@@ -391,6 +391,7 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
     segments: list[BodySegment] = []
     text_lines: list[str] = []
     pending_mode: str | None = None
+    fence = ""
 
     def flush_text() -> None:
         if text_lines:
@@ -399,6 +400,19 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
 
     i = 0
     while i < len(lines):
+        line = lines[i]
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence or marker:
+            if marker:
+                run, rest = marker.groups()
+                if not fence:
+                    fence = run
+                elif run.startswith(fence) and not rest.strip():
+                    fence = ""
+            pending_mode = None
+            text_lines.append(line)
+            i += 1
+            continue
         directive = parse_table_format_directive(lines[i])
         if directive is not None:
             pending_mode = directive
@@ -421,10 +435,11 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
         else:
             if lines[i].strip():
                 pending_mode = None
-            kind, media_ref = parse_media_reference_line(lines[i], workdir=workdir)
-            if media_ref is not None:
+            attachment = re.fullmatch(r"\[\[attach:[ \t]*(.+?)\]\][ \t]*\r?", line)
+            if attachment and attachment[1].strip():
                 flush_text()
-                segments.append(BodySegment(kind=kind, image=media_ref))
+                path = (workdir or Path.cwd()) / attachment[1].strip()
+                segments.append(BodySegment(kind="document", image=ImageReference(path)))
                 i += 1
                 continue
             text_lines.append(lines[i])

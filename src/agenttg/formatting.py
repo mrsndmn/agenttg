@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline
+
 from .constants import (
     _BARE_FILE_RE,
     _BARE_IMAGE_RE,
@@ -380,56 +383,56 @@ def parse_table_format_directive(line: str) -> str | None:
     return match.group("mode").strip() if match else None
 
 
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
-_BACKTICKS = re.compile(r"(\\*)(`+)")
+_ATTACHMENT = re.compile(r"\[\[attach:[ \t]*(.+?)\]\][ \t]*\r?$", re.MULTILINE)
 
 
-def _code_lines(lines: list[str]) -> set[int]:
-    """Protect fenced blocks and lines enclosed by an inline code span."""
-    protected: set[int] = set()
-    fence = ""
-    paragraph_start = 0
+def _attachment_rule(state: StateInline, silent: bool) -> bool:
+    """Recognize a whole directive line when the inline parser reaches it as prose."""
+    pos = state.pos
+    if pos and state.src[pos - 1] != "\n":
+        return False
+    match = _ATTACHMENT.match(state.src, pos, state.posMax)
+    if not match or not match[1].strip():
+        return False
+    if not silent:
+        token = state.push("attachment", "", 0)
+        token.meta["offset"] = pos
+    state.pos = match.end()
+    return True
 
-    def protect_spans(end: int) -> None:
-        # A span closes at the next equally long run. A backslash can
-        # escape the first opening backtick, but is literal inside the span.
-        runs = [
-            (number, len(match[2]), len(match[1]) % 2)
-            for number in range(paragraph_start, end)
-            for match in _BACKTICKS.finditer(lines[number])
-        ]
-        next_run: dict[int, int] = {}
-        closes = {}
-        for pos in reversed(range(len(runs))):
-            _, length, escaped = runs[pos]
-            closes[pos] = next_run.get(length - escaped)
-            next_run[length] = pos
-        pos = 0
-        while pos < len(runs):
-            close = closes[pos]
-            if close is None:
-                pos += 1
-            else:
-                protected.update(range(runs[pos][0] + 1, runs[close][0]))
-                pos = close + 1
 
-    for index, line in enumerate(lines):
-        marker = _FENCE.match(line)
-        if fence:
-            protected.add(index)
-            if marker and marker[1].startswith(fence) and not marker[2].strip():
-                fence = ""
-            paragraph_start = index + 1
-        elif marker and (marker[1][0] == "~" or "`" not in marker[2]):
-            protect_spans(index)
-            protected.add(index)
-            fence = marker[1]
-            paragraph_start = index + 1
-        elif not line.strip():
-            protect_spans(index)
-            paragraph_start = index + 1
-    protect_spans(len(lines))
-    return protected
+_MARKDOWN = MarkdownIt("commonmark").disable("inline")
+_MARKDOWN.inline.ruler.before("link", "attachment", _attachment_rule)
+
+
+def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, Path]]:
+    """Map CommonMark block and inline tokens back to original reply lines."""
+    code: set[int] = set()
+    paths: dict[int, Path] = {}
+    env: dict = {}
+    for block in _MARKDOWN.parse(body, env):
+        if block.map is None:
+            continue
+        start, end = block.map
+        if block.type in {"fence", "code_block"}:
+            code.update(range(start, end))
+        elif block.type == "inline" and "[[attach:" in block.content:
+            tokens = []
+            _MARKDOWN.inline.parse(block.content, _MARKDOWN, env, tokens)
+            offset = 0
+            line = start
+            for token in tokens:
+                if token.type != "attachment":
+                    continue
+                pos = token.meta["offset"]
+                line += block.content.count("\n", offset, pos)
+                offset = pos
+                # Block parsing strips container prefixes and indentation. Only
+                # accept directives that also occupy the original, unindented line.
+                match = _ATTACHMENT.fullmatch(lines[line])
+                if match:
+                    paths[line] = Path(match[1].strip())
+    return code, paths
 
 
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
@@ -439,11 +442,12 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
     ``table_mode`` on the next table segment, provided only blank lines separate
     them; anything else in between drops it.
     """
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
     lines = body.split("\n")
     segments: list[BodySegment] = []
     text_lines: list[str] = []
     pending_mode: str | None = None
-    code_lines = _code_lines(lines)
+    code_lines, attachments = _reply_lines(body, lines)
 
     def flush_text() -> None:
         if text_lines:
@@ -480,10 +484,9 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
         else:
             if lines[i].strip():
                 pending_mode = None
-            attachment = re.fullmatch(r"\[\[attach:[ \t]*(.+?)\]\][ \t]*\r?", line)
-            if attachment and attachment[1].strip():
+            if i in attachments:
                 flush_text()
-                path = (workdir or Path.cwd()) / attachment[1].strip()
+                path = (workdir or Path.cwd()) / attachments[i]
                 segments.append(BodySegment(kind="document", image=ImageReference(path)))
                 i += 1
                 continue

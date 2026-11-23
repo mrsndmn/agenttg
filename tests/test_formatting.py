@@ -290,3 +290,12 @@ def test_attachment_after_code_span_and_inside_multiline_span():
     segments = split_body_into_segments(body)
     assert [s.kind for s in segments] == ["text", "document", "text"]
     assert segments[1].image.path.name == "real"
+
+
+def test_attachment_code_context_respects_markdown_blocks():
+    body = (
+        "# Typing a ` character\nShow `this example:\n[[attach: example.txt]]\nliterally`\n"
+        "\n- ```sh\n  echo hello\n  ```\n\n[[attach: real.txt]]"
+    )
+    documents = [s.image.path.name for s in split_body_into_segments(body) if s.kind == "document"]
+    assert documents == ["real.txt"]

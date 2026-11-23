@@ -38,41 +38,22 @@ def send_photo(
     reply_to_message_id: int | None = None,
     thread_id: int | None = None,
     session: requests.Session | None = None,
+    *,
+    max_bytes: int | None = None,
 ) -> requests.Response | None:
     """Send an image file as a photo to the chat. Returns response or None on failure."""
-    s = session or make_session()
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    data: dict[str, object] = {"chat_id": chat_id}
-    if caption:
-        data["caption"] = caption[:1024]
-    if reply_to_message_id is not None:
-        data["reply_to_message_id"] = reply_to_message_id
-    if thread_id is not None:
-        data["message_thread_id"] = thread_id
-    try:
-        with open(png_path, "rb") as f:
-            resp = _request_with_retry(
-                s,
-                "post",
-                url,
-                data=data,
-                files={"photo": f},
-                timeout=60,
-            )
-        if resp.status_code != 200:
-            logger.warning(
-                "Telegram sendPhoto returned %s: %s",
-                resp.status_code,
-                resp.text[:200],
-            )
-        return resp
-    except (requests.RequestException, OSError) as exc:
-        logger.warning("Failed to send Telegram photo: %s", exc)
-        return None
-    finally:
-        if delete_after_send and png_path.exists():
-            with suppress(OSError):
-                png_path.unlink()
+    return _send_upload(
+        "photo",
+        token,
+        chat_id,
+        png_path,
+        caption,
+        delete_after_send,
+        reply_to_message_id,
+        thread_id,
+        session,
+        max_bytes,
+    )
 
 
 def send_video(
@@ -121,6 +102,7 @@ def send_video(
                 video_path.unlink()
 
 
+MAX_REPLY_PHOTO_BYTES = 10_000_000
 MAX_REPLY_FILE_BYTES = 50_000_000
 
 
@@ -157,8 +139,36 @@ def send_document(
     max_bytes: int | None = None,
 ) -> requests.Response | None:
     """Send a file as a document to the chat. Returns response or None on failure."""
+    return _send_upload(
+        "document",
+        token,
+        chat_id,
+        file_path,
+        caption,
+        delete_after_send,
+        reply_to_message_id,
+        thread_id,
+        session,
+        max_bytes,
+    )
+
+
+def _send_upload(
+    kind,
+    token,
+    chat_id,
+    file_path,
+    caption,
+    delete_after_send,
+    reply_to_message_id,
+    thread_id,
+    session,
+    max_bytes,
+):
+    method = "sendPhoto" if kind == "photo" else "sendDocument"
+    timeout = 60 if kind == "photo" else 120
     s = session or make_session()
-    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    url = f"https://api.telegram.org/bot{token}/{method}"
     data: dict[str, object] = {"chat_id": chat_id}
     if caption:
         data["caption"] = caption[:1024]
@@ -177,8 +187,8 @@ def send_document(
                 "post",
                 url,
                 data=data,
-                files={"document": (file_path.name, contents)},
-                timeout=120,
+                files={kind: (file_path.name, contents)},
+                timeout=timeout,
             )
         else:
             with open(file_path, "rb") as f:
@@ -187,18 +197,19 @@ def send_document(
                     "post",
                     url,
                     data=data,
-                    files={"document": f},
-                    timeout=120,
+                    files={kind: f},
+                    timeout=timeout,
                 )
         if resp.status_code != 200:
             logger.warning(
-                "Telegram sendDocument returned %s: %s",
+                "Telegram %s returned %s: %s",
+                method,
                 resp.status_code,
                 resp.text[:200],
             )
         return resp
     except (requests.RequestException, OSError) as exc:
-        logger.warning("Failed to send Telegram document: %s", exc)
+        logger.warning("Failed to send Telegram %s: %s", kind, exc)
         return None
     finally:
         if delete_after_send and file_path.exists():
@@ -552,25 +563,27 @@ def send_reply_markdown(
                 )
             )
             first_message = False
-        elif segment.kind == "document":
+        elif segment.kind in {"image", "document"}:
             if segment.image is None:
                 continue
-            doc_ref = segment.image
-            caption = doc_ref.caption or doc_ref.path.name
+            attachment = segment.image
+            caption = attachment.caption or attachment.path.name
             try:
-                doc_resp = send_document(
-                    token=token,
-                    chat_id=chat_id,
-                    file_path=doc_ref.path,
+                is_photo = segment.kind == "image"
+                sender = send_photo if is_photo else send_document
+                response = sender(
+                    token,
+                    chat_id,
+                    attachment.path,
                     caption=caption,
                     delete_after_send=False,
-                    max_bytes=MAX_REPLY_FILE_BYTES,
+                    max_bytes=MAX_REPLY_PHOTO_BYTES if is_photo else MAX_REPLY_FILE_BYTES,
                     reply_to_message_id=reply_to_message_id if first_message else None,
                     thread_id=thread_id,
                     session=session,
                 )
             except _AttachmentError as exc:
-                notice = f"Skipped {doc_ref.path.name}: {exc}"
+                notice = f"Skipped {attachment.path.name}: {exc}"
                 all_responses.extend(
                     send_text_parts(
                         token,
@@ -584,8 +597,8 @@ def send_reply_markdown(
                 )
                 first_message = False
                 continue
-            if doc_resp is not None:
-                all_responses.append(doc_resp)
+            if response is not None:
+                all_responses.append(response)
             first_message = False
 
     if first_message:

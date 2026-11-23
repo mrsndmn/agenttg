@@ -436,7 +436,7 @@ def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, Path]
 
 
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
-    """Split body into alternating text, table, and explicit document segments.
+    """Split body into alternating text, table, and explicit attachment segments.
 
     A ``<!-- fmt=... -->`` directive line is consumed (never rendered) and sets
     ``table_mode`` on the next table segment, provided only blank lines separate
@@ -487,7 +487,8 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
             if i in attachments:
                 flush_text()
                 path = (workdir or Path.cwd()) / attachments[i]
-                segments.append(BodySegment(kind="document", image=ImageReference(path)))
+                kind = "image" if path.suffix.lower() in _IMAGE_EXTENSIONS else "document"
+                segments.append(BodySegment(kind=kind, image=ImageReference(path)))
                 i += 1
                 continue
             text_lines.append(lines[i])

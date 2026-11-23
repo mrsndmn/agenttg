@@ -361,6 +361,7 @@ def test_request_with_retry_raises_after_max_retries(mock_sleep):
 
 def test_reply_uploads_only_explicit_files(tmp_path, mock_session, monkeypatch):
     monkeypatch.setattr(agenttg.api, "MAX_REPLY_FILE_BYTES", 4)
+    monkeypatch.setattr(agenttg.api, "MAX_REPLY_PHOTO_BYTES", 4)
     path = tmp_path / "a b.png"
     path.write_bytes(b"1234")
     (tmp_path / "large").write_bytes(b"12345")
@@ -383,11 +384,42 @@ def test_reply_uploads_only_explicit_files(tmp_path, mock_session, monkeypatch):
     calls = mock_session.post.call_args_list
     assert [c.args[0].rsplit("/", 1)[1] for c in calls] == [
         "sendMessage",
-        "sendDocument",
+        "sendPhoto",
         "sendMessage",
         "sendMessage",
     ]
-    assert calls[1].kwargs["files"]["document"] == (path.name, b"1234")
+    assert calls[1].kwargs["files"]["photo"] == (path.name, b"1234")
     assert "large" in calls[2].kwargs["json"]["text"]
     assert "limit" in calls[2].kwargs["json"]["text"]
     assert "Answer continues" in calls[3].kwargs["json"]["text"]
+
+
+@pytest.mark.parametrize(
+    "suffix,kind",
+    [
+        (".JPG", "photo"),
+        (".jpeg", "photo"),
+        (".webp", "photo"),
+        (".mp4", "document"),
+        (".pdf", "document"),
+        ("", "document"),
+    ],
+)
+def test_explicit_attachment_uses_media_specific_limit(
+    tmp_path, mock_session, monkeypatch, suffix, kind
+):
+    monkeypatch.setattr(agenttg.api, "MAX_REPLY_PHOTO_BYTES", 2)
+    monkeypatch.setattr(agenttg.api, "MAX_REPLY_FILE_BYTES", 4)
+    path = tmp_path / ("file" + suffix)
+    limit = 2 if kind == "photo" else 4
+    for size in [limit, limit + 1]:
+        mock_session.reset_mock()
+        path.write_bytes(b"x" * size)
+        agenttg.send_reply_markdown("TOKEN", "123", f"[[attach: {path}]]", session=mock_session)
+        call = mock_session.post.call_args
+        if size == limit:
+            assert call.args[0].endswith("/send" + kind.title())
+            assert call.kwargs["files"][kind] == (path.name, b"x" * size)
+        else:
+            assert call.args[0].endswith("/sendMessage")
+            assert "limit" in call.kwargs["json"]["text"]

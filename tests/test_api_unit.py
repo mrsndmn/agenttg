@@ -426,3 +426,12 @@ def test_explicit_attachment_uses_media_specific_limit(
         else:
             assert call.args[0].endswith("/sendMessage")
             assert "limit" in call.kwargs["json"]["text"]
+
+
+@pytest.mark.parametrize("label,caption", [(r"A &amp; B \[2\]", "A & B [2]"), ("", None)])
+def test_reply_sends_visible_link_label(tmp_path, mock_session, label, caption):
+    (tmp_path / "a.pdf").write_bytes(b"pdf")
+    agenttg.send_reply_markdown(
+        "TOKEN", "123", f'[{label}](a.pdf "attach")', workdir=tmp_path, session=mock_session
+    )
+    assert mock_session.post.call_args.kwargs["data"].get("caption") == caption

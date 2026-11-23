@@ -567,7 +567,6 @@ def send_reply_markdown(
             if segment.image is None:
                 continue
             attachment = segment.image
-            caption = attachment.caption or attachment.path.name
             try:
                 is_photo = segment.kind == "image"
                 sender = send_photo if is_photo else send_document
@@ -575,7 +574,7 @@ def send_reply_markdown(
                     token,
                     chat_id,
                     attachment.path,
-                    caption=caption,
+                    caption=attachment.caption,
                     delete_after_send=False,
                     max_bytes=MAX_REPLY_PHOTO_BYTES if is_photo else MAX_REPLY_FILE_BYTES,
                     reply_to_message_id=reply_to_message_id if first_message else None,

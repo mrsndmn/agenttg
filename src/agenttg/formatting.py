@@ -398,6 +398,17 @@ _MARKDOWN = MarkdownIt("commonmark", {"store_labels": True}).disable("inline")
 _MARKDOWN.inline.ruler.at("link", _link_with_source)
 
 
+def _caption_text(tokens) -> str:
+    """Read the visible inline label, including alt text inside nested images."""
+    parts = []
+    for token in tokens:
+        if token.type in {"text", "text_special", "code_inline"}:
+            parts.append(token.content)
+        elif token.type == "image":
+            parts.append(_caption_text(token.children or []))
+    return "".join(parts)
+
+
 def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, ImageReference]]:
     """Find standalone local links titled 'attach' in CommonMark prose."""
     code: set[int] = set()
@@ -439,11 +450,7 @@ def _reply_lines(body: str, lines: list[str]) -> tuple[set[int], dict[int, Image
                         or re.match(r"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|//)", path)
                     ):
                         continue
-                    caption = "".join(
-                        part.content
-                        for part in tokens[opening + 1 : index]
-                        if part.type in {"text", "code_inline", "image"}
-                    )
+                    caption = _caption_text(tokens[opening + 1 : index])
                     attachments[line] = ImageReference(Path(path), caption)
     return code, attachments
 

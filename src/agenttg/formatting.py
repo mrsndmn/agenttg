@@ -380,6 +380,58 @@ def parse_table_format_directive(line: str) -> str | None:
     return match.group("mode").strip() if match else None
 
 
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_BACKTICKS = re.compile(r"(\\*)(`+)")
+
+
+def _code_lines(lines: list[str]) -> set[int]:
+    """Protect fenced blocks and lines enclosed by an inline code span."""
+    protected: set[int] = set()
+    fence = ""
+    paragraph_start = 0
+
+    def protect_spans(end: int) -> None:
+        # A span closes at the next equally long run. A backslash can
+        # escape the first opening backtick, but is literal inside the span.
+        runs = [
+            (number, len(match[2]), len(match[1]) % 2)
+            for number in range(paragraph_start, end)
+            for match in _BACKTICKS.finditer(lines[number])
+        ]
+        next_run: dict[int, int] = {}
+        closes = {}
+        for pos in reversed(range(len(runs))):
+            _, length, escaped = runs[pos]
+            closes[pos] = next_run.get(length - escaped)
+            next_run[length] = pos
+        pos = 0
+        while pos < len(runs):
+            close = closes[pos]
+            if close is None:
+                pos += 1
+            else:
+                protected.update(range(runs[pos][0] + 1, runs[close][0]))
+                pos = close + 1
+
+    for index, line in enumerate(lines):
+        marker = _FENCE.match(line)
+        if fence:
+            protected.add(index)
+            if marker and marker[1].startswith(fence) and not marker[2].strip():
+                fence = ""
+            paragraph_start = index + 1
+        elif marker and (marker[1][0] == "~" or "`" not in marker[2]):
+            protect_spans(index)
+            protected.add(index)
+            fence = marker[1]
+            paragraph_start = index + 1
+        elif not line.strip():
+            protect_spans(index)
+            paragraph_start = index + 1
+    protect_spans(len(lines))
+    return protected
+
+
 def split_body_into_segments(body: str, workdir: Path | None = None) -> list[BodySegment]:
     """Split body into alternating text, table, and explicit document segments.
 
@@ -391,7 +443,7 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
     segments: list[BodySegment] = []
     text_lines: list[str] = []
     pending_mode: str | None = None
-    fence = ""
+    code_lines = _code_lines(lines)
 
     def flush_text() -> None:
         if text_lines:
@@ -401,14 +453,7 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
     i = 0
     while i < len(lines):
         line = lines[i]
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
-        if fence or marker:
-            if marker:
-                run, rest = marker.groups()
-                if not fence:
-                    fence = run
-                elif run.startswith(fence) and not rest.strip():
-                    fence = ""
+        if i in code_lines:
             pending_mode = None
             text_lines.append(line)
             i += 1
@@ -421,7 +466,7 @@ def split_body_into_segments(body: str, workdir: Path | None = None) -> list[Bod
         if lines[i].strip().startswith("|"):
             flush_text()
             table_lines: list[str] = []
-            while i < len(lines) and lines[i].strip().startswith("|"):
+            while i < len(lines) and i not in code_lines and lines[i].strip().startswith("|"):
                 table_lines.append(lines[i])
                 i += 1
             segments.append(

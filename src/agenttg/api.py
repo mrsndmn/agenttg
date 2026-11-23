@@ -130,7 +130,10 @@ class _AttachmentError(Exception):
 
 def _read_attachment(path: Path, limit: int) -> bytes:
     # A replaced path can point to a FIFO. Inspect the open descriptor without blocking.
-    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb") as stream:
+    def nonblocking(name, flags):
+        return os.open(name, flags | getattr(os, "O_NONBLOCK", 0))
+
+    with open(path, "rb", opener=nonblocking) as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise _AttachmentError("not a regular file")

@@ -283,3 +283,10 @@ def test_split_body_into_segments_mixed_content():
     kinds = [s.kind for s in segments]
     assert "text" in kinds
     assert "table" in kinds
+
+
+def test_attachment_after_code_span_and_inside_multiline_span():
+    body = "```sample```\n[[attach: real]]\nShow `this\n[[attach: example]]\nexample`"
+    segments = split_body_into_segments(body)
+    assert [s.kind for s in segments] == ["text", "document", "text"]
+    assert segments[1].image.path.name == "real"
